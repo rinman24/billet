@@ -1,0 +1,120 @@
+[project]
+name = "billet"
+description = "A stateless, configurable manager for Azure Hosts and the repos' devcontainer Workspaces that run on them."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Rich Inman, PhD" }]
+license = "MIT"
+license-files = ["LICENSE"]
+dynamic = ["version"]
+keywords = [
+    "devcontainer",
+    "devbox",
+    "azure",
+    "ssh",
+    "cloud-development",
+    "host",
+    "workspace",
+    "claude",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    "typer>=0.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/rinman24/billet"
+Repository = "https://github.com/rinman24/billet"
+
+[project.scripts]
+billet = "billet.cli.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/billet/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/billet"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/billet", "tests", "README.md", "CLAUDE.md", "LICENSE"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.11",
+    "pyright>=1.1.390",
+    "pytest>=8",
+    "pytest-cov>=7.1.0",
+    "import-linter>=2.1",
+    "mkdocs>=1.6",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+extend-select = [
+    "D",    # pydocstyle
+    "PL",   # Pylint
+    "I",    # isort (import sorting / grouping)
+    "TID",  # flake8-tidy-imports (banned-api, import hygiene)
+]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-sort-within-sections = true
+known-first-party = ["billet", "tests"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+# Test helpers often use non-imperative fixture docstrings; magic-value checks are noisy in tests.
+"tests/*" = ["D100", "D103", "D401", "D205", "D209", "PLR2004", "PLR0913"]
+# Empty package markers carry a one-line docstring but need no module-level docstring rule beyond it.
+"**/__init__.py" = ["D104"]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.11"
+include = ["src", "tests"]
+extraPaths = [".", "src"]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+
+# Closed-architecture layering (Löwy volatility-based decomposition). Higher layers may
+# import lower ones; never the reverse. The layers are empty package skeletons in this
+# slice — the contract gains teeth as the Host and Workspace subsystems land.
+[tool.importlinter]
+root_package = "billet"
+
+[[tool.importlinter.contracts]]
+name = "billet closed-architecture layers"
+type = "layers"
+layers = [
+    "billet.cli",
+    "billet.workspace",
+    "billet.host",
+    "billet.access",
+    "billet.infrastructure",
+    "billet.shared",
+]

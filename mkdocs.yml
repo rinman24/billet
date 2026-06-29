@@ -1,0 +1,7 @@
+site_name: billet
+site_description: A stateless manager for cloud Hosts and devcontainer Workspaces.
+repo_url: https://github.com/rinman24/billet
+theme:
+  name: readthedocs
+nav:
+  - Home: index.md

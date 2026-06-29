@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# uv / virtualenv (uv.lock IS committed)
+.venv/
+
+# Build artifacts
+build/
+dist/
+site/
+
+# Test / type-checker caches
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.coverage
+coverage.xml
+htmlcov/
+
+# Devbox host scripts: per-developer overrides + local audit breadcrumb.
+# config.local.sh holds the operator's subscription id and project values, never tracked.
+scripts/devbox/config.local.sh
+scripts/devbox/.devbox.log
+scripts/devbox/*.log
+
+# Editor / OS
+.DS_Store
+*.swp
