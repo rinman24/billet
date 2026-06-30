@@ -1,12 +1,14 @@
 """The ``billet`` command-line entry point.
 
-This slice ships only the composition-root skeleton: a Typer application and a
-``version`` command. The Host and Workspace command groups land in later slices.
+The composition root: a Typer application, a ``version`` command, and the ``host`` command
+group. The Workspace command group lands in later slices.
 """
 
 from importlib.metadata import version as _dist_version
 
 import typer
+
+from billet.cli import host_commands
 
 app = typer.Typer(
     name="billet",
@@ -14,6 +16,7 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+app.add_typer(host_commands.app, name="host")
 
 
 @app.callback()

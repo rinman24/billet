@@ -1,0 +1,87 @@
+# billet configuration — copy to ~/.config/billet/config.toml and edit.
+#
+#   mkdir -p ~/.config/billet && cp config.example.toml ~/.config/billet/config.toml
+#
+# billet is stateless: this file is the only operator-authored state. Power state,
+# public IP, and the host<->workspace mapping are derived live from Azure + resource
+# tags, never cached here. Resolution order for the config path:
+#   1. the --config PATH global option
+#   2. the BILLET_CONFIG environment variable
+#   3. $XDG_CONFIG_HOME/billet/config.toml  (default ~/.config/billet/config.toml)
+#
+# Nothing here is a secret. A subscription id is an identifier, not a credential —
+# Azure access is gated by `az login`. Do not put PATs or passwords in this file.
+
+# ---------------------------------------------------------------------------------
+# [billet] — global settings
+# ---------------------------------------------------------------------------------
+[billet]
+# The Azure subscription billet pins (`az account set --subscription`) before any az
+# operation, so runs are deterministic regardless of your ambient CLI default.
+subscription_id = "00000000-0000-0000-0000-000000000000"
+# Optional. The host used when a `billet host …` command omits --host. If unset and
+# more than one host is defined, --host is required.
+default_host = "devbox"
+
+# ---------------------------------------------------------------------------------
+# [hosts.<key>] — one table per cloud Host (a VM). The table key (here "devbox") is
+# the logical host name you pass to `--host`; it need not equal the Azure vm_name.
+# ---------------------------------------------------------------------------------
+[hosts.devbox]
+# --- Azure placement (required) ---
+resource_group = "gswa-devbox-rg"
+# Optional; defaults to the table key. The live devbox VM is named "gswa-devbox".
+vm_name        = "gswa-devbox"
+location       = "westus3"
+admin_user     = "azureuser"
+
+# --- VM shape (required for cold create; ignored on resume/stop of an existing VM) ---
+vm_image       = "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
+vm_size        = "Standard_D4s_v4"
+public_ip_sku  = "Standard"
+os_disk_gb     = 64
+storage_sku    = "Premium_LRS"
+
+# --- Inbound SSH NSG rule (optional) ---
+# nsg_name defaults to "<vm_name>NSG" (the name `az vm create` derives).
+nsg_name       = "gswa-devboxNSG"
+ssh_rule_name  = "default-allow-ssh"
+
+# --- Topology (optional) ---
+# Whether this host runs Workspaces. The fleet-host (slice 7) sets this false: billet
+# manages its VM lifecycle but registers no Workspaces on it.
+manages_workspaces = true
+
+# --- Supply-chain pins (optional; Docker defaults shown) ---
+# Used on the cold path to install Docker from its signed apt repo (level-B provenance).
+docker_gpg_url = "https://download.docker.com/linux/ubuntu/gpg"
+docker_apt_url = "https://download.docker.com/linux/ubuntu"
+
+# ---------------------------------------------------------------------------------
+# [workspaces.<key>] — one table per repo devcontainer running on a Host.
+# The Host subsystem (slice 4) parses and validates these but only the host-level
+# verbs ship now; the Workspace subsystem (slice 5+) consumes the rest
+# (register / start / stop / connect / ssh-config).
+# ---------------------------------------------------------------------------------
+[workspaces.gswa-backend]
+host               = "devbox"                                  # which [hosts.<key>] runs it
+repo_url           = "git@github.com:genshift/gswa-backend.git"
+repo_dir           = "gswa-backend"                            # dir on the host (relative to $HOME)
+compose_file       = ".devcontainer/docker-compose.yml"        # relative to repo_dir
+service            = "app"                                     # compose service to drive
+container_user     = "dev"                                     # in-container ssh user
+container_ssh_port = 2222                                      # distinct loopback port per workspace
+workspace_folder   = "/app"                                    # where `connect` lands you
+tmux_session       = "main"
+host_alias         = "gswa-devbox"                             # preserved ssh-config aliases
+container_alias    = "gswa-container"
+# Optional Claude agent-teams flag written into the repo's .claude/settings.local.json
+# on the host at provision time. Empty to skip.
+agent_teams_flag   = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
+# Bootstrap hooks. host_bootstrap_cmd runs on the VM in repo_dir before `compose build`;
+# container_bootstrap_cmd runs inside the service container after `compose up`. Both
+# default to a no-op (":"). gswa's bootstrap now lives in its own .devcontainer/postcreate.sh.
+host_bootstrap_cmd      = ":"
+container_bootstrap_cmd = "bash /app/.devcontainer/postcreate.sh"
+# What `billet start --verify` runs inside the container after a cold bootstrap.
+verify_cmd              = "make test"

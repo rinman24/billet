@@ -5,3 +5,5 @@ theme:
   name: readthedocs
 nav:
   - Home: index.md
+  - Architecture Decisions:
+      - ADR-0001 Closed-architecture decomposition: adr/adr-0001-closed-architecture-decomposition.md
