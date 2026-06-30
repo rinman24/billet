@@ -12,6 +12,7 @@ class StepKind(Enum):
     """A host lifecycle operation the manager can schedule."""
 
     CREATE = "create"
+    ENSURE_TAGS = "ensure_tags"
     PIN_INBOUND = "pin_inbound"
     START = "start"
     DEALLOCATE = "deallocate"

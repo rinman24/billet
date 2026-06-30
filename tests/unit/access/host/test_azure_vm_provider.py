@@ -92,6 +92,14 @@ def test_deallocate_issues_az_vm_deallocate() -> None:
     assert any("az vm deallocate" in c for c in runner.commands())
 
 
+def test_ensure_tags_merges_billet_ownership_tags() -> None:
+    provider, runner = _provider(lambda _argv: completed())
+    provider.ensure_tags(SPEC)
+    update = next(c for c in runner.commands() if "az vm update" in c)
+    assert "tags.managed-by=billet" in update
+    assert "tags.billet-host=devbox" in update
+
+
 # --- security invariant: inbound is always a single /32 ----------------------------
 
 

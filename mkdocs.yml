@@ -7,3 +7,4 @@ nav:
   - Home: index.md
   - Architecture Decisions:
       - ADR-0001 Closed-architecture decomposition: adr/adr-0001-closed-architecture-decomposition.md
+      - ADR-0002 Workspace subsystem: adr/adr-0002-workspace-subsystem.md

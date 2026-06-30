@@ -168,6 +168,22 @@ class AzureVmHostProvider:
         argv = ssh.ssh_argv(spec.admin_user, ip, "bash -se")
         self._runner.run(argv, input_text=_docker_install_script(spec))
 
+    def ensure_tags(self, spec: HostSpec) -> None:
+        """Adopt an existing VM by merging billet's ownership tags (idempotent).
+
+        ``az vm update --set tags.<k>=<v>`` merges the named tag keys without disturbing
+        any other tags, and is a no-op when they already match — so it is safe to run on
+        every ``up`` regardless of who created the VM.
+        """
+        self._runner.run(
+            [
+                "az", "vm", "update",
+                "-g", spec.resource_group, "-n", spec.vm_name,
+                "--set", "tags.managed-by=billet", f"tags.billet-host={spec.key}",
+                "--output", "none",
+            ]
+        )  # fmt: skip
+
     # --- helpers -------------------------------------------------------------------
 
     def _public_ip(self, spec: HostSpec) -> str | None:

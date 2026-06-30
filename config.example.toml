@@ -59,29 +59,28 @@ docker_apt_url = "https://download.docker.com/linux/ubuntu"
 
 # ---------------------------------------------------------------------------------
 # [workspaces.<key>] — one table per repo devcontainer running on a Host.
-# The Host subsystem (slice 4) parses and validates these but only the host-level
-# verbs ship now; the Workspace subsystem (slice 5+) consumes the rest
-# (register / start / stop / connect / ssh-config).
+#
+# This table holds only billet's *operator intent* for a Workspace. The repo's container
+# facts — the compose service, compose file(s), workspace folder, in-container ssh user
+# (`remoteUser`), and the `postCreateCommand` bootstrap — are NOT declared here: billet
+# reads them live from the repo's own `.devcontainer/devcontainer.json` on the host (a
+# read-only data contract; see ADR-0002). One source of truth, and each repo evolves its
+# container without re-editing billet's config.
 # ---------------------------------------------------------------------------------
 [workspaces.gswa-backend]
 host               = "devbox"                                  # which [hosts.<key>] runs it
 repo_url           = "git@github.com:genshift/gswa-backend.git"
 repo_dir           = "gswa-backend"                            # dir on the host (relative to $HOME)
-compose_file       = ".devcontainer/docker-compose.yml"        # relative to repo_dir
-service            = "app"                                     # compose service to drive
-container_user     = "dev"                                     # in-container ssh user
 container_ssh_port = 2222                                      # distinct loopback port per workspace
-workspace_folder   = "/app"                                    # where `connect` lands you
-tmux_session       = "main"
+tmux_session       = "main"                                    # tmux session `connect` attaches
 host_alias         = "gswa-devbox"                             # preserved ssh-config aliases
 container_alias    = "gswa-container"
 # Optional Claude agent-teams flag written into the repo's .claude/settings.local.json
-# on the host at provision time. Empty to skip.
+# on the host at start time. Empty to skip.
 agent_teams_flag   = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
-# Bootstrap hooks. host_bootstrap_cmd runs on the VM in repo_dir before `compose build`;
-# container_bootstrap_cmd runs inside the service container after `compose up`. Both
-# default to a no-op (":"). gswa's bootstrap now lives in its own .devcontainer/postcreate.sh.
-host_bootstrap_cmd      = ":"
-container_bootstrap_cmd = "bash /app/.devcontainer/postcreate.sh"
+# Optional host-side bootstrap hook, run in repo_dir before `compose up` (e.g. generate
+# .env). Defaults to a no-op (":"). The in-container bootstrap is the devcontainer's own
+# `postCreateCommand` (gswa's is `bash .devcontainer/postcreate.sh`, declared there).
+host_bootstrap_cmd = ":"
 # What `billet start --verify` runs inside the container after a cold bootstrap.
-verify_cmd              = "make test"
+verify_cmd         = "make test"

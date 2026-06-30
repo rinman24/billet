@@ -27,10 +27,11 @@ def test_plan_up_cold_create_is_billable_and_ordered() -> None:
     assert provider.calls == ["preflight", "status"]
 
 
-def test_plan_up_resume_pins_then_starts() -> None:
+def test_plan_up_resume_adopts_then_pins_then_starts() -> None:
     provider = FakeHostProvider(_status(HostPowerState.DEALLOCATED))
     plan = HostManager(provider).plan_up(SPEC)
     assert [s.kind for s in plan.steps] == [
+        StepKind.ENSURE_TAGS,
         StepKind.PIN_INBOUND,
         StepKind.START,
         StepKind.WAIT_REACHABLE,
@@ -38,10 +39,10 @@ def test_plan_up_resume_pins_then_starts() -> None:
     assert not plan.is_billable
 
 
-def test_plan_up_running_just_confirms_reachable() -> None:
+def test_plan_up_running_adopts_then_confirms_reachable() -> None:
     provider = FakeHostProvider(_status(HostPowerState.RUNNING, "1.2.3.4", "VM running"))
     plan = HostManager(provider).plan_up(SPEC)
-    assert [s.kind for s in plan.steps] == [StepKind.WAIT_REACHABLE]
+    assert [s.kind for s in plan.steps] == [StepKind.ENSURE_TAGS, StepKind.WAIT_REACHABLE]
 
 
 def test_plan_up_stopped_raises() -> None:
@@ -93,3 +94,12 @@ def test_apply_dispatches_each_step_to_provider_in_order() -> None:
         "wait_until_reachable",
         "ensure_supply_chain",
     ]
+
+
+def test_apply_resume_dispatches_adoption_first() -> None:
+    provider = FakeHostProvider(_status(HostPowerState.DEALLOCATED))
+    manager = HostManager(provider)
+    plan = manager.plan_up(SPEC)
+    provider.calls.clear()
+    manager.apply(plan, SPEC)
+    assert provider.calls == ["ensure_tags", "pin_inbound", "start", "wait_until_reachable"]

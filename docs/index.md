@@ -28,10 +28,14 @@ lower ones; never the reverse:
 
 The rationale for this decomposition — the volatility axes, the dedicated `contracts`
 layer, the `HostProvider` seam, and dry-run/plan layering — is recorded in
-[ADR-0001](adr/adr-0001-closed-architecture-decomposition.md).
+[ADR-0001](adr/adr-0001-closed-architecture-decomposition.md). The Workspace subsystem and
+its `devcontainer.json`-as-data-contract boundary are recorded in
+[ADR-0002](adr/adr-0002-workspace-subsystem.md).
 
 ## Status
 
-The Host subsystem (`billet host up|stop|pin-ip`) drives the VM in Python; the lifted
-cloud-devbox shell scripts in `scripts/devbox/` remain as the connect/workspace path until
-later slices replace them.
+Both subsystems run in Python. The Host subsystem (`billet host up|stop|pin-ip`) drives the
+VM; the Workspace subsystem (`billet add|ls|start|stop|connect|ssh-config|rm`) clones,
+builds, bootstraps, and connects a repo's devcontainer on a Host, reading each repo's
+`.devcontainer/devcontainer.json` as a read-only data contract. The lifted cloud-devbox
+shell scripts in `scripts/devbox/` remain as a fallback until they are removed in slice 6.

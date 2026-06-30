@@ -9,6 +9,10 @@ from billet.contracts import HostPowerState, HostProvider, HostSpec, Plan, PlanS
 from billet.shared.errors import HostOperationError
 
 
+def _adopt_step(spec: HostSpec) -> PlanStep:
+    return PlanStep(StepKind.ENSURE_TAGS, f"adopt VM {spec.vm_name} (tag managed-by=billet)")
+
+
 def _pin_step(spec: HostSpec) -> PlanStep:
     return PlanStep(StepKind.PIN_INBOUND, f"pin inbound SSH on {spec.nsg_name} to operator /32")
 
@@ -45,13 +49,17 @@ class HostManager:
             return Plan(
                 host_key=spec.key,
                 steps=(
+                    _adopt_step(spec),
                     _pin_step(spec),
                     PlanStep(StepKind.START, f"start VM {spec.vm_name}"),
                     _wait_step(spec),
                 ),
             )
         if state is HostPowerState.RUNNING:
-            return Plan(host_key=spec.key, steps=(_wait_step(spec, verb="confirm"),))
+            return Plan(
+                host_key=spec.key,
+                steps=(_adopt_step(spec), _wait_step(spec, verb="confirm")),
+            )
         if state is HostPowerState.STOPPED:
             raise HostOperationError(
                 f"VM {spec.vm_name} is 'stopped' (not deallocated). "
@@ -90,6 +98,8 @@ class HostManager:
     def _dispatch(self, kind: StepKind, spec: HostSpec) -> None:
         if kind is StepKind.CREATE:
             self._provider.create(spec)
+        elif kind is StepKind.ENSURE_TAGS:
+            self._provider.ensure_tags(spec)
         elif kind is StepKind.PIN_INBOUND:
             self._provider.pin_inbound(spec)
         elif kind is StepKind.START:

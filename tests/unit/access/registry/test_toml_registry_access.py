@@ -78,10 +78,13 @@ def test_vm_name_defaults_to_table_key(tmp_path: Path) -> None:
 def test_parses_workspace_with_defaults(tmp_path: Path) -> None:
     ws = RegistryAccess(_write(tmp_path, _FULL_CONFIG)).workspace("gswa-backend")
     assert ws.host == "devbox"
-    assert ws.compose_file == ".devcontainer/docker-compose.yml"
+    assert ws.repo_dir == "gswa-backend"
     assert ws.container_ssh_port == 2222
-    assert ws.service == "app"
-    assert ws.container_bootstrap_cmd == ":"
+    assert ws.host_alias == "gswa-devbox"
+    assert ws.container_alias == "gswa-container"
+    assert ws.tmux_session == "main"
+    assert ws.host_bootstrap_cmd == ":"
+    assert ws.verify_cmd == "make test"
 
 
 def test_missing_file_raises(tmp_path: Path) -> None:
