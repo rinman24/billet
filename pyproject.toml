@@ -102,8 +102,11 @@ testpaths = ["tests"]
 addopts = "-q"
 
 # Closed-architecture layering (Löwy volatility-based decomposition). Higher layers may
-# import lower ones; never the reverse. The layers are empty package skeletons in this
-# slice — the contract gains teeth as the Host and Workspace subsystems land.
+# import lower ones; never the reverse. `billet.contracts` holds the cross-layer data
+# contracts + service Protocols (the HostProvider seam) so the access-layer implementation
+# and the host-layer manager both depend on the abstraction without an upward import — see
+# docs/adr/adr-0001-closed-architecture-decomposition.md. It sits above `infrastructure`
+# so infrastructure stays pure (it cannot import domain contracts).
 [tool.importlinter]
 root_package = "billet"
 
@@ -115,6 +118,7 @@ layers = [
     "billet.workspace",
     "billet.host",
     "billet.access",
+    "billet.contracts",
     "billet.infrastructure",
     "billet.shared",
 ]

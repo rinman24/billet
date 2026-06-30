@@ -14,10 +14,12 @@ and the host↔workspace mapping are derived live from Azure and resource tags.
 
 ## Status
 
-Early scaffold. This slice lifts the existing cloud-devbox shell scripts verbatim
-(`scripts/devbox/`) and stands up the package skeleton, lint/type/test gates, and CI. The
-Python `billet host …` / `billet add|start|connect …` commands replace the lifted bash in
-later slices.
+The **Host** subsystem ships in Python: `billet host up|stop|pin-ip` drives the VM behind
+the `HostProvider` seam, with a dry-run plan and a confirm gate on billable cold-create.
+The lifted cloud-devbox shell scripts (`scripts/devbox/`) remain as the connect/Workspace
+path until the Workspace subsystem (`billet add|start|connect …`) lands in later slices.
+The architecture is recorded in
+[ADR-0001](docs/adr/adr-0001-closed-architecture-decomposition.md).
 
 ## Install
 
@@ -26,6 +28,18 @@ uv tool install git+https://github.com/rinman24/billet
 ```
 
 (PyPI publication is deferred; install from GitHub for now.)
+
+## Usage
+
+```bash
+mkdir -p ~/.config/billet && cp config.example.toml ~/.config/billet/config.toml
+# edit config.toml: subscription, [hosts.<key>], [workspaces.<key>]
+
+billet host up --dry-run   # show the plan (cold-create / resume, auto-detected)
+billet host up             # create or resume the VM (cold-create asks to confirm)
+billet host pin-ip         # re-pin inbound SSH to your current egress IP/32
+billet host stop           # deallocate the VM (stops compute billing)
+```
 
 ## Ubiquitous language
 

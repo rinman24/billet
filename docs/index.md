@@ -20,12 +20,18 @@ lower ones; never the reverse:
 | --- | --- |
 | `billet.cli` | Typer client / composition root |
 | `billet.workspace` | Workspace subsystem (contracts, engine, manager) |
-| `billet.host` | Host subsystem (contracts, manager) |
+| `billet.host` | Host subsystem (manager) |
 | `billet.access` | ResourceAccess (Azure VM provider, registry, ssh-config, container, source) |
+| `billet.contracts` | data contracts + service Protocols (the `HostProvider` seam) |
 | `billet.infrastructure` | side-effecting primitives (`az`, `ssh`, `process`) |
 | `billet.shared` | cross-cutting utilities |
 
+The rationale for this decomposition — the volatility axes, the dedicated `contracts`
+layer, the `HostProvider` seam, and dry-run/plan layering — is recorded in
+[ADR-0001](adr/adr-0001-closed-architecture-decomposition.md).
+
 ## Status
 
-Early scaffold. The current state lifts the cloud-devbox shell scripts verbatim into
-`scripts/devbox/`; the Python command surface replaces them in later slices.
+The Host subsystem (`billet host up|stop|pin-ip`) drives the VM in Python; the lifted
+cloud-devbox shell scripts in `scripts/devbox/` remain as the connect/workspace path until
+later slices replace them.
