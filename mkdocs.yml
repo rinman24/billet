@@ -8,3 +8,4 @@ nav:
   - Architecture Decisions:
       - ADR-0001 Closed-architecture decomposition: adr/adr-0001-closed-architecture-decomposition.md
       - ADR-0002 Workspace subsystem: adr/adr-0002-workspace-subsystem.md
+      - ADR-0003 Workspace port-binding contract: adr/adr-0003-workspace-port-binding-contract.md
