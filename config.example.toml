@@ -84,3 +84,30 @@ agent_teams_flag   = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 host_bootstrap_cmd = ":"
 # What `billet start --verify` runs inside the container after a cold bootstrap.
 verify_cmd         = "make test"
+
+# ---------------------------------------------------------------------------------
+# A SECOND Workspace on the SAME Host — the multi-repo case (slice 6).
+#
+# Two rules make two containers coexist on one VM:
+#   1. A distinct `container_ssh_port` (uniqueness is validated per-host by `billet add`).
+#   2. This repo's compose must bind sshd to billet's assigned port, not a hardcoded one.
+#      billet exports BILLET_CONTAINER_SSH_PORT before every `docker compose`, so the repo's
+#      compose should publish (see ADR-0003):
+#          ports:
+#            - "127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-2222}:22"
+#      The `:-2222` default keeps a repo that has not adopted the variable working unchanged;
+#      only the second repo onward must parameterize its port.
+#
+# `billet ssh-config` then renders both containers behind the one Host (ProxyJump), each with
+# its own port and a collision-free HostKeyAlias — and the Host still needs only one NSG rule.
+# ---------------------------------------------------------------------------------
+# [workspaces.other-repo]
+# host               = "devbox"                                  # the SAME shared host
+# repo_url           = "git@github.com:my-org/other-repo.git"
+# repo_dir           = "other-repo"
+# container_ssh_port = 2223                                      # distinct from gswa-backend's 2222
+# tmux_session       = "main"
+# host_alias         = "gswa-devbox"                             # same host alias (one VM)
+# container_alias    = "other-container"                         # distinct container alias
+# host_bootstrap_cmd = ":"
+# verify_cmd         = "make test"

@@ -116,6 +116,28 @@ def test_compose_up_runs_build_with_host_hook_and_agent_teams() -> None:
     assert runner.commands()[-1].endswith("bash -se")
 
 
+def test_compose_up_exports_the_assigned_loopback_port() -> None:
+    # The repo's compose binds sshd to ${BILLET_CONTAINER_SSH_PORT} (ADR-0003).
+    access, runner = _access(lambda _argv: completed())
+    access.compose_up(make_workspace_spec(container_ssh_port=2223), REMOTE, FACTS)
+    script = runner.inputs[-1]
+    assert script is not None
+    assert "export BILLET_CONTAINER_SSH_PORT=2223" in script
+
+
+def test_every_compose_op_exports_the_port() -> None:
+    spec = make_workspace_spec(container_ssh_port=2299)
+    access, runner = _access(lambda _argv: completed(stdout="abc\n"))
+    access.compose_up(spec, REMOTE, FACTS)
+    access.run_post_create(spec, REMOTE, FACTS)
+    access.verify(spec, REMOTE, FACTS)
+    access.compose_stop(spec, REMOTE, FACTS)
+    access.is_running(spec, REMOTE, FACTS)
+    for script in runner.inputs:
+        assert script is not None
+        assert "export BILLET_CONTAINER_SSH_PORT=2299" in script
+
+
 def test_run_post_create_execs_in_service_container() -> None:
     access, runner = _access(lambda _argv: completed())
     access.run_post_create(SPEC, REMOTE, FACTS)

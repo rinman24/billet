@@ -129,15 +129,12 @@ class ComposeContainerAccess:
         self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts
     ) -> None:
         """Stop the compose stack (non-destructive — named volumes/data persist)."""
-        script = (
-            f"set -euo pipefail\ncd {shlex.quote(spec.repo_dir)}\n{_compose_cmd(facts, 'stop')}\n"
-        )
-        self._run_script(remote, script)
+        self._run_script(remote, _prelude(spec) + _compose_cmd(facts, "stop") + "\n")
 
     def is_running(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> bool:
         """Return whether the service container is currently running."""
         ps = _compose_cmd(facts, "ps", "--status", "running", "-q", shlex.quote(facts.service))
-        script = f"set -euo pipefail\ncd {shlex.quote(spec.repo_dir)}\n{ps}\n"
+        script = _prelude(spec) + ps + "\n"
         argv = ssh.ssh_argv(remote.admin_user, remote.ip, "bash -se", batch_mode=True)
         result = self._runner.run(argv, input_text=script, check=False)
         return bool(result.stdout.strip())
@@ -151,11 +148,10 @@ class ComposeContainerAccess:
     @staticmethod
     def _compose_up_script(spec: WorkspaceSpec, facts: DevcontainerFacts) -> str:
         prelude = (
-            "set -euo pipefail\n"
-            f"cd {shlex.quote(spec.repo_dir)}\n"
-            f"HOST_BOOTSTRAP_CMD={shlex.quote(spec.host_bootstrap_cmd)}\n"
-            'eval "$HOST_BOOTSTRAP_CMD"\n'
-            f"AGENT_TEAMS_FLAG={shlex.quote(spec.agent_teams_flag)}\n"
+            _prelude(spec)
+            + f"HOST_BOOTSTRAP_CMD={shlex.quote(spec.host_bootstrap_cmd)}\n"
+            + 'eval "$HOST_BOOTSTRAP_CMD"\n'
+            + f"AGENT_TEAMS_FLAG={shlex.quote(spec.agent_teams_flag)}\n"
         )
         # Write the optional Claude agent-teams flag once (orchestrator-side, never tracked).
         agent_teams = (
@@ -177,7 +173,21 @@ class ComposeContainerAccess:
         exec_cmd = _compose_cmd(
             facts, "exec", "-T", shlex.quote(facts.service), "bash", "-lc", shlex.quote(command)
         )
-        return f"set -euo pipefail\ncd {shlex.quote(spec.repo_dir)}\n{exec_cmd}\n"
+        return _prelude(spec) + exec_cmd + "\n"
+
+
+def _prelude(spec: WorkspaceSpec) -> str:
+    """Shared remote-script header: fail-fast, cd into the repo, export the assigned port.
+
+    ``BILLET_CONTAINER_SSH_PORT`` is exported before every ``docker compose`` invocation so
+    the repo's compose can bind its sshd to billet's assigned loopback port
+    (``127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-2222}:22``). See ADR-0003.
+    """
+    return (
+        "set -euo pipefail\n"
+        f"cd {shlex.quote(spec.repo_dir)}\n"
+        f"export BILLET_CONTAINER_SSH_PORT={spec.container_ssh_port}\n"
+    )
 
 
 def _compose_cmd(facts: DevcontainerFacts, *args: str) -> str:

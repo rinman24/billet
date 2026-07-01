@@ -244,3 +244,61 @@ def test_rm_prints_deregistration_guidance(
     assert result.exit_code == 0
     assert "stateless" in result.output
     assert "billet stop gswa-backend" in result.output
+
+
+# --- multi-workspace (slice 6) -----------------------------------------------------
+
+_SECOND_WS = """
+[workspaces.other-repo]
+host = "devbox"
+repo_url = "git@github.com:my-org/other-repo.git"
+repo_dir = "other-repo"
+container_ssh_port = 2223
+host_alias = "gswa-devbox"
+container_alias = "other-container"
+"""
+
+
+@pytest.fixture
+def two_ws_config(tmp_path: Path) -> Path:
+    path = tmp_path / "config.toml"
+    path.write_text(_CONFIG + _SECOND_WS)
+    return path
+
+
+def test_ssh_config_renders_both_workspaces_one_host(
+    monkeypatch: pytest.MonkeyPatch, two_ws_config: Path
+) -> None:
+    _, _, _, cfg = _install(monkeypatch)
+    result = runner.invoke(app, ["ssh-config", "--config", str(two_ws_config)])
+    assert result.exit_code == 0
+    conf = cfg.written
+    assert conf is not None
+    # One shared host entry, two distinct container entries + ports + HostKeyAliases.
+    assert conf.count("Host gswa-devbox\n") == 1
+    assert "Host gswa-container" in conf
+    assert "Host other-container" in conf
+    assert "Port 2222" in conf
+    assert "Port 2223" in conf
+    assert "HostKeyAlias gswa-container" in conf
+    assert "HostKeyAlias other-container" in conf
+
+
+def test_ls_lists_both_workspaces(monkeypatch: pytest.MonkeyPatch, two_ws_config: Path) -> None:
+    _install(monkeypatch)
+    result = runner.invoke(app, ["ls", "--config", str(two_ws_config)])
+    assert result.exit_code == 0
+    assert "gswa-backend" in result.output
+    assert "other-repo" in result.output
+
+
+def test_add_detects_a_port_collision_on_the_same_host(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    colliding = _SECOND_WS.replace("container_ssh_port = 2223", "container_ssh_port = 2222")
+    path = tmp_path / "config.toml"
+    path.write_text(_CONFIG + colliding)
+    _install(monkeypatch)
+    result = runner.invoke(app, ["add", "other-repo", "--config", str(path)])
+    assert result.exit_code == 1
+    assert "collision" in result.output.lower()

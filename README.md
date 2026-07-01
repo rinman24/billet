@@ -59,6 +59,26 @@ The compose `service`, compose file(s), `workspaceFolder`, `remoteUser`, and
 `postCreateCommand` are read live from each repo's `.devcontainer/devcontainer.json` — billet
 does not duplicate them in `config.toml`.
 
+### Multiple Workspaces on one Host
+
+Several repos can share one VM. Give each a distinct `container_ssh_port`
+(`billet add` validates per-host uniqueness), and have each repo's compose bind its sshd to
+billet's assigned port — billet exports `BILLET_CONTAINER_SSH_PORT` before every
+`docker compose`, so the repo publishes:
+
+```yaml
+services:
+  <service>:
+    ports:
+      - "127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-2222}:22"
+```
+
+The `:-2222` default keeps an un-adopted repo working unchanged; only the second repo onward
+must parameterize its port. `billet ssh-config` then renders both containers behind the one
+Host (`ProxyJump`), each with its own port and a collision-free `HostKeyAlias`, and the Host
+still needs a single NSG rule. See
+[ADR-0003](docs/adr/adr-0003-workspace-port-binding-contract.md).
+
 ## Ubiquitous language
 
 - **Host** — a cloud VM that runs containers.
