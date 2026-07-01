@@ -4,7 +4,14 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
-from billet.contracts import HostPowerState, HostSpec, HostStatus
+from billet.contracts import (
+    DevcontainerFacts,
+    HostPowerState,
+    HostSpec,
+    HostStatus,
+    RemoteHost,
+    WorkspaceSpec,
+)
 from billet.infrastructure.process import CompletedProcess
 from billet.shared.errors import ProcessError
 
@@ -30,6 +37,44 @@ _DEFAULT_HOST_SPEC = HostSpec(
 def make_host_spec(**overrides: Any) -> HostSpec:
     """Return the canonical test HostSpec with any field overridden."""
     return replace(_DEFAULT_HOST_SPEC, **overrides)
+
+
+_DEFAULT_WORKSPACE_SPEC = WorkspaceSpec(
+    key="gswa-backend",
+    host="devbox",
+    repo_url="git@github.com:genshift/gswa-backend.git",
+    repo_dir="gswa-backend",
+    container_ssh_port=2222,
+    host_alias="gswa-devbox",
+    container_alias="gswa-container",
+    tmux_session="main",
+    agent_teams_flag="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+    host_bootstrap_cmd=":",
+    verify_cmd="make test",
+)
+
+_DEFAULT_FACTS = DevcontainerFacts(
+    service="gswa-backend",
+    compose_files=(".devcontainer/docker-compose.yml",),
+    workspace_folder="/app",
+    remote_user="dev",
+    post_create_command="bash .devcontainer/postcreate.sh",
+)
+
+
+def make_workspace_spec(**overrides: Any) -> WorkspaceSpec:
+    """Return the canonical test WorkspaceSpec with any field overridden."""
+    return replace(_DEFAULT_WORKSPACE_SPEC, **overrides)
+
+
+def make_devcontainer_facts(**overrides: Any) -> DevcontainerFacts:
+    """Return the canonical test DevcontainerFacts with any field overridden."""
+    return replace(_DEFAULT_FACTS, **overrides)
+
+
+def make_remote_host(admin_user: str = "azureuser", ip: str = "20.0.0.5") -> RemoteHost:
+    """Return a RemoteHost for access/manager tests."""
+    return RemoteHost(admin_user=admin_user, ip=ip)
 
 
 def completed(stdout: str = "", returncode: int = 0, stderr: str = "") -> CompletedProcess:
@@ -103,3 +148,64 @@ class FakeHostProvider:
 
     def ensure_supply_chain(self, spec: HostSpec) -> None:
         self.calls.append("ensure_supply_chain")
+
+    def ensure_tags(self, spec: HostSpec) -> None:
+        self.calls.append("ensure_tags")
+
+
+class FakeSourceAccess:
+    """A SourceAccess that records each clone request."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def ensure_clone(self, spec: WorkspaceSpec, remote: RemoteHost) -> None:
+        self.calls.append((spec.key, remote.ip))
+
+
+class FakeContainerAccess:
+    """A ContainerAccess that records calls and returns fixed facts / running state."""
+
+    def __init__(self, facts: DevcontainerFacts | None = None, *, running: bool = True) -> None:
+        self._facts = facts or _DEFAULT_FACTS
+        self._running = running
+        self.calls: list[str] = []
+
+    def read_facts(self, spec: WorkspaceSpec, remote: RemoteHost) -> DevcontainerFacts:
+        self.calls.append("read_facts")
+        return self._facts
+
+    def compose_up(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
+        self.calls.append("compose_up")
+
+    def run_post_create(
+        self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts
+    ) -> None:
+        self.calls.append("run_post_create")
+
+    def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
+        self.calls.append("verify")
+
+    def compose_stop(
+        self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts
+    ) -> None:
+        self.calls.append("compose_stop")
+
+    def is_running(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> bool:
+        self.calls.append("is_running")
+        return self._running
+
+
+class FakeSshConfigAccess:
+    """An SshConfigAccess that captures the written content and Include calls."""
+
+    def __init__(self) -> None:
+        self.written: str | None = None
+        self.include_calls = 0
+
+    def write_conf(self, content: str) -> str:
+        self.written = content
+        return "/home/op/.ssh/config.d/billet.conf"
+
+    def ensure_include(self) -> None:
+        self.include_calls += 1

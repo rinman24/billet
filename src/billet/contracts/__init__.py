@@ -7,9 +7,23 @@ See ADR-0001 for why the contracts live here rather than beside their subsystems
 from billet.contracts.config import GlobalConfig
 from billet.contracts.host import HostPowerState, HostProvider, HostSpec, HostStatus
 from billet.contracts.plan import Plan, PlanStep, StepKind
-from billet.contracts.workspace import WorkspaceSpec
+from billet.contracts.workspace import (
+    ContainerAccess,
+    DevcontainerFacts,
+    RemoteHost,
+    SourceAccess,
+    SshConfigAccess,
+    SshConfigBlock,
+    WorkspacePlan,
+    WorkspacePlanStep,
+    WorkspaceSpec,
+    WorkspaceStatus,
+    WorkspaceStepKind,
+)
 
 __all__ = [
+    "ContainerAccess",
+    "DevcontainerFacts",
     "GlobalConfig",
     "HostPowerState",
     "HostProvider",
@@ -17,6 +31,14 @@ __all__ = [
     "HostStatus",
     "Plan",
     "PlanStep",
+    "RemoteHost",
+    "SourceAccess",
+    "SshConfigAccess",
+    "SshConfigBlock",
     "StepKind",
+    "WorkspacePlan",
+    "WorkspacePlanStep",
     "WorkspaceSpec",
+    "WorkspaceStatus",
+    "WorkspaceStepKind",
 ]

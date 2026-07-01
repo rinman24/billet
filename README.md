@@ -14,12 +14,15 @@ and the host↔workspace mapping are derived live from Azure and resource tags.
 
 ## Status
 
-The **Host** subsystem ships in Python: `billet host up|stop|pin-ip` drives the VM behind
-the `HostProvider` seam, with a dry-run plan and a confirm gate on billable cold-create.
-The lifted cloud-devbox shell scripts (`scripts/devbox/`) remain as the connect/Workspace
-path until the Workspace subsystem (`billet add|start|connect …`) lands in later slices.
-The architecture is recorded in
-[ADR-0001](docs/adr/adr-0001-closed-architecture-decomposition.md).
+Both subsystems ship in Python. The **Host** subsystem drives the VM behind the
+`HostProvider` seam (`billet host up|stop|pin-ip`), with a dry-run plan and a confirm gate on
+billable cold-create. The **Workspace** subsystem clones, builds, bootstraps, and connects a
+repo's devcontainer on a Host (`billet add|ls|start|stop|connect|ssh-config|rm`), reading each
+repo's `.devcontainer/devcontainer.json` as a read-only data contract. The lifted cloud-devbox
+shell scripts (`scripts/devbox/`) remain as a fallback until they are removed in slice 6. The
+architecture is recorded in
+[ADR-0001](docs/adr/adr-0001-closed-architecture-decomposition.md) and
+[ADR-0002](docs/adr/adr-0002-workspace-subsystem.md).
 
 ## Install
 
@@ -40,6 +43,21 @@ billet host up             # create or resume the VM (cold-create asks to confir
 billet host pin-ip         # re-pin inbound SSH to your current egress IP/32
 billet host stop           # deallocate the VM (stops compute billing)
 ```
+
+Then run a repository's devcontainer Workspace on the Host:
+
+```bash
+billet add gswa-backend          # validate the [workspaces.<key>] block
+billet start gswa-backend        # bring the Host up, then clone + compose up + bootstrap
+billet ssh-config                # write ~/.ssh/config.d/billet.conf (+ one Include line)
+billet connect gswa-backend      # ssh in and attach to the tmux session
+billet ls                        # show each Workspace and whether it is running
+billet stop gswa-backend         # stop the container (non-destructive)
+```
+
+The compose `service`, compose file(s), `workspaceFolder`, `remoteUser`, and
+`postCreateCommand` are read live from each repo's `.devcontainer/devcontainer.json` — billet
+does not duplicate them in `config.toml`.
 
 ## Ubiquitous language
 

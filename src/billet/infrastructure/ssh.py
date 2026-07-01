@@ -11,25 +11,40 @@ from billet.shared.errors import HostOperationError
 _ACCEPT_NEW = ("-o", "StrictHostKeyChecking=accept-new")
 
 
-def ssh_argv(
-    user: str,
+def ssh_argv(  # noqa: PLR0913 — a thin argv builder; each option maps to one ssh flag
+    user: str | None,
     host: str,
     remote_command: str | None = None,
     *,
     connect_timeout: int | None = None,
     batch_mode: bool = False,
+    tty: bool = False,
+    forward_agent: bool = False,
 ) -> list[str]:
     """Build an ``ssh`` argv with trust-on-first-use host-key acceptance.
 
-    The interactive flags (``-tt`` / ``-A``) the connect and agent-forwarded-clone paths
-    need are deliberately omitted until the Workspace subsystem (slice 5) introduces them.
+    Parameters
+    ----------
+    user
+        The remote user, producing a ``user@host`` target. Pass ``None`` to target a
+        bare ``host`` — used when ``host`` is an ``ssh_config`` alias that already
+        supplies the user (the ``connect`` path).
+    tty
+        Request a remote TTY (``ssh -t``) — for the interactive ``connect`` shell.
+    forward_agent
+        Forward the local ssh-agent (``ssh -A``) — for the agent-forwarded clone, so the
+        developer key flows in over the connection and is never parked on the host.
     """
     argv: list[str] = ["ssh", *_ACCEPT_NEW]
+    if tty:
+        argv.append("-t")
+    if forward_agent:
+        argv.append("-A")
     if connect_timeout is not None:
         argv += ["-o", f"ConnectTimeout={connect_timeout}"]
     if batch_mode:
         argv += ["-o", "BatchMode=yes"]
-    argv.append(f"{user}@{host}")
+    argv.append(f"{user}@{host}" if user else host)
     if remote_command is not None:
         argv.append(remote_command)
     return argv

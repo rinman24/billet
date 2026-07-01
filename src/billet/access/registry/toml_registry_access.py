@@ -15,7 +15,6 @@ from billet.shared.paths import resolve_config_path
 
 _DEFAULT_DOCKER_GPG_URL = "https://download.docker.com/linux/ubuntu/gpg"
 _DEFAULT_DOCKER_APT_URL = "https://download.docker.com/linux/ubuntu"
-_DEFAULT_COMPOSE_FILE = ".devcontainer/docker-compose.yml"
 _DEFAULT_SSH_RULE_NAME = "default-allow-ssh"
 _DEFAULT_CONTAINER_SSH_PORT = 2222
 
@@ -144,19 +143,14 @@ class RegistryAccess:
             host=self._str(table, "host", ctx),
             repo_url=self._str(table, "repo_url", ctx),
             repo_dir=self._str(table, "repo_dir", ctx),
-            compose_file=self._str(table, "compose_file", ctx, default=_DEFAULT_COMPOSE_FILE),
-            service=self._str(table, "service", ctx, default="app"),
-            container_user=self._str(table, "container_user", ctx, default="dev"),
             container_ssh_port=self._int(
                 table, "container_ssh_port", ctx, default=_DEFAULT_CONTAINER_SSH_PORT
             ),
-            workspace_folder=self._str(table, "workspace_folder", ctx, default="/workspace"),
-            tmux_session=self._str(table, "tmux_session", ctx, default="main"),
             host_alias=self._str(table, "host_alias", ctx),
             container_alias=self._str(table, "container_alias", ctx),
+            tmux_session=self._str(table, "tmux_session", ctx, default="main"),
             agent_teams_flag=self._str(table, "agent_teams_flag", ctx, default=""),
             host_bootstrap_cmd=self._str(table, "host_bootstrap_cmd", ctx, default=":"),
-            container_bootstrap_cmd=self._str(table, "container_bootstrap_cmd", ctx, default=":"),
             verify_cmd=self._str(table, "verify_cmd", ctx, default="make test"),
         )
 

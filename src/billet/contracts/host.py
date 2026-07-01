@@ -85,3 +85,12 @@ class HostProvider(Protocol):
     def ensure_supply_chain(self, spec: HostSpec) -> None:
         """Idempotently install the base supply chain (Docker) on the host."""
         ...
+
+    def ensure_tags(self, spec: HostSpec) -> None:
+        """Idempotently stamp the billet ownership tags on an existing host (adoption).
+
+        Lets billet adopt a VM it did not create — tagging it ``managed-by=billet`` and
+        ``billet-host=<key>`` without recreating it — so later discovery reads truth from
+        the backend's tags rather than a local cache.
+        """
+        ...
