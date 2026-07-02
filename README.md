@@ -1,7 +1,35 @@
-# billet
+<div align="center">
 
-A stateless, configurable manager for cloud development **Hosts** and the repos'
-devcontainer **Workspaces** that run on them.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/logo/logo-horizontal-on-dark.png">
+  <img alt="billet" src="brand/logo/logo-horizontal-on-light.png" width="300">
+</picture>
+
+### A berth for every repo.
+
+A stateless CLI that posts any repo's devcontainer to a shared cloud **Host** — from the command line.
+
+<!-- style=flat rounds the badge corners (berth shape); each <picture> lifts the
+     label color from aubergine to violet in GitHub dark mode so the left side stays legible -->
+<p>
+  <a href="https://pypi.org/project/billet/"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/pypi-billet-C05CE0?style=flat&labelColor=3A2A4D&logo=pypi&logoColor=white">
+    <img alt="PyPI" src="https://img.shields.io/badge/pypi-billet-C05CE0?style=flat&labelColor=17101F&logo=pypi&logoColor=white">
+  </picture></a>
+  <a href="#installation"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/python-3.11%2B-9C8BB2?style=flat&labelColor=3A2A4D&logo=python&logoColor=white">
+    <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-9C8BB2?style=flat&labelColor=17101F&logo=python&logoColor=white">
+  </picture></a>
+  <a href="LICENSE"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/license-MIT-3FD2BE?style=flat&labelColor=3A2A4D">
+    <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3FD2BE?style=flat&labelColor=17101F">
+  </picture></a>
+</p>
+
+<sub><a href="#installation">Install</a> &nbsp;·&nbsp; <a href="#quick-start">Quick start</a> &nbsp;·&nbsp; <a href="#commands">Commands</a> &nbsp;·&nbsp; <a href="https://rinman24.github.io/billet/brand/guidelines.html">Brand</a> &nbsp;·&nbsp; <a href="https://github.com/rinman24/billet">Source</a></sub>
+
+</div>
+
 
 `billet` provisions and drives an Azure VM (a **Host**), then starts, stops, and connects
 to one or more repositories' devcontainers (**Workspaces**) running on it. Each repository

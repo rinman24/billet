@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="billet">
+  <title>billet favicon</title>
+  <rect x="0" y="0" width="100" height="100" rx="20" fill="#17101F"></rect>
+  <g>
+    <rect x="21.4" y="17.5" width="26" height="18.2" rx="2.6" fill="#C05CE0"></rect>
+    <rect x="52.6" y="17.5" width="26" height="18.2" rx="2.6" fill="#9C8BB2"></rect>
+    <rect x="21.4" y="40.9" width="26" height="18.2" rx="2.6" fill="#9C8BB2"></rect>
+    <rect x="52.6" y="40.9" width="26" height="18.2" rx="2.6" fill="#3FD2BE"></rect>
+    <rect x="21.4" y="64.3" width="26" height="18.2" rx="2.6" fill="#C05CE0"></rect>
+    <rect x="52.6" y="64.3" width="26" height="18.2" rx="2.6" fill="#9C8BB2"></rect>
+  </g>
+</svg>
