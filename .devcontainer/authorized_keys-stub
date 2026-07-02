@@ -1,0 +1,13 @@
+# Tracked empty authorized_keys stub — the non-VM build default.
+#
+# docker-compose bind-mounts this file read-only to /home/dev/.ssh/authorized_keys when
+# DEVBOX_AUTHORIZED_KEYS is unset, so the build never hard-fails for someone without the
+# VM's authorized_keys. With only this stub, the container's sshd trusts no keys (you
+# simply can't ssh in) — harmless.
+#
+# On the gswa-devbox VM, set in the gitignored .devcontainer/.env:
+#   DEVBOX_AUTHORIZED_KEYS=/home/azureuser/.ssh/authorized_keys
+# so the same key that opens the VM opens this container (single source of trust; uid
+# 1000 on both sides keeps sshd StrictModes satisfied with no chown).
+#
+# Lines beginning with '#' are ignored by sshd, so this file is a valid empty keyring.
