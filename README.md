@@ -21,7 +21,7 @@ A stateless CLI that posts any repo's devcontainer to a shared cloud **Host** 鈥
   <a href="LICENSE"><picture><source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/license-MIT-3FD2BE?style=flat&labelColor=3A2A4D"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3FD2BE?style=flat&labelColor=17101F"></picture></a>
 </p>
 
-<sub><a href="#installation">Install</a> &nbsp;路&nbsp; <a href="#quick-start">Quick start</a> &nbsp;路&nbsp; <a href="#commands">Commands</a> &nbsp;路&nbsp; <a href="https://rinman24.github.io/billet/brand/guidelines.html">Brand</a> &nbsp;路&nbsp; <a href="https://github.com/rinman24/billet">Source</a></sub>
+<sub><a href="#installation">Install</a> &nbsp;路&nbsp; <a href="#quick-start">Quick start</a> &nbsp;路&nbsp; <a href="#commands">Commands</a> &nbsp;路&nbsp; <a href="https://rinman24.github.io/billet/">Docs</a> &nbsp;路&nbsp; <a href="https://rinman24.github.io/billet/brand/guidelines.html">Brand</a> &nbsp;路&nbsp; <a href="https://github.com/rinman24/billet">Source</a></sub>
 
 </div>
 
@@ -44,8 +44,8 @@ repo's devcontainer on a Host (`billet add|ls|start|stop|connect|ssh-config|rm`)
 repo's `.devcontainer/devcontainer.json` as a read-only data contract. The Python tool now
 fully replaces the original cloud-devbox shell scripts, which have been removed. The
 architecture is recorded in
-[ADR-0001](docs/adr/adr-0001-closed-architecture-decomposition.md) and
-[ADR-0002](docs/adr/adr-0002-workspace-subsystem.md).
+[ADR-0001](https://rinman24.github.io/billet/adr/adr-0001-closed-architecture-decomposition/) and
+[ADR-0002](https://rinman24.github.io/billet/adr/adr-0002-workspace-subsystem/).
 
 ## Install
 
@@ -100,7 +100,7 @@ The `:-2222` default keeps an un-adopted repo working unchanged; only the second
 must parameterize its port. `billet ssh-config` then renders both containers behind the one
 Host (`ProxyJump`), each with its own port and a collision-free `HostKeyAlias`, and the Host
 still needs a single NSG rule. See
-[ADR-0003](docs/adr/adr-0003-workspace-port-binding-contract.md).
+[ADR-0003](https://rinman24.github.io/billet/adr/adr-0003-workspace-port-binding-contract/).
 
 ### A Host without Workspaces (the fleet-host)
 
@@ -129,7 +129,7 @@ billet host stop --host fleet           # deallocate
 But it registers no `[workspaces.*]`. The workspace verbs (`add`/`start`/`stop`/`connect`/
 `ssh-config`) refuse a Host with `manages_workspaces = false`, and `billet ls` flags any
 Workspace wrongly placed on one as `INVALID` rather than probing it. See
-[ADR-0004](docs/adr/adr-0004-host-manages-workspaces.md).
+[ADR-0004](https://rinman24.github.io/billet/adr/adr-0004-host-manages-workspaces/).
 
 ## Ubiquitous language
 
