@@ -107,6 +107,35 @@ Host (`ProxyJump`), each with its own port and a collision-free `HostKeyAlias`, 
 still needs a single NSG rule. See
 [ADR-0003](docs/adr/adr-0003-workspace-port-binding-contract.md).
 
+### A Host without Workspaces (the fleet-host)
+
+Some Hosts are managed by billet purely for their VM lifecycle and carry no Workspaces — for
+example a fleet-host whose runtime is owned elsewhere. Declare such a Host with
+`manages_workspaces = false`:
+
+```toml
+[hosts.fleet]
+resource_group     = "GSWA-FLEET-HOST-RG"
+vm_name            = "gswa-fleet-host"
+location           = "westus3"
+admin_user         = "azureuser"
+vm_size            = "Standard_D4s_v5"
+manages_workspaces = false
+# ... vm_image / public_ip_sku / os_disk_gb / storage_sku as for any host
+```
+
+Its VM lifecycle works like any other Host:
+
+```bash
+billet host up --host fleet --dry-run   # adopt → pin → start → wait
+billet host stop --host fleet           # deallocate
+```
+
+But it registers no `[workspaces.*]`. The workspace verbs (`add`/`start`/`stop`/`connect`/
+`ssh-config`) refuse a Host with `manages_workspaces = false`, and `billet ls` flags any
+Workspace wrongly placed on one as `INVALID` rather than probing it. See
+[ADR-0004](docs/adr/adr-0004-host-manages-workspaces.md).
+
 ## Ubiquitous language
 
 - **Host** — a cloud VM that runs containers.

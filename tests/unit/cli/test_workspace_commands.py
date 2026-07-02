@@ -302,3 +302,69 @@ def test_add_detects_a_port_collision_on_the_same_host(
     result = runner.invoke(app, ["add", "other-repo", "--config", str(path)])
     assert result.exit_code == 1
     assert "collision" in result.output.lower()
+
+
+# --- fleet host / manages_workspaces enforcement (slice 7, ADR-0004) ---------------
+
+# A non-managing Host (the fleet-host) plus a Workspace an operator wrongly placed on it.
+_FLEET_HOST_AND_WS = """
+[hosts.fleet]
+resource_group = "GSWA-FLEET-HOST-RG"
+vm_name = "gswa-fleet-host"
+location = "westus3"
+admin_user = "azureuser"
+vm_image = "img"
+vm_size = "Standard_D4s_v5"
+public_ip_sku = "Standard"
+os_disk_gb = 64
+storage_sku = "Premium_LRS"
+manages_workspaces = false
+
+[workspaces.on-fleet]
+host = "fleet"
+repo_url = "git@github.com:my-org/on-fleet.git"
+repo_dir = "on-fleet"
+container_ssh_port = 2224
+host_alias = "gswa-fleet-host"
+container_alias = "on-fleet-container"
+"""
+
+
+@pytest.fixture
+def fleet_config(tmp_path: Path) -> Path:
+    path = tmp_path / "config.toml"
+    path.write_text(_CONFIG + _FLEET_HOST_AND_WS)
+    return path
+
+
+@pytest.mark.parametrize("verb", ["add", "start", "stop", "connect"])
+def test_command_verbs_refuse_a_non_managing_host(
+    monkeypatch: pytest.MonkeyPatch, fleet_config: Path, verb: str
+) -> None:
+    _install(monkeypatch)
+    result = runner.invoke(app, [verb, "on-fleet", "--config", str(fleet_config)])
+    assert result.exit_code == 1
+    assert "manages_workspaces" in result.output
+    assert "billet host" in result.output  # points at the lifecycle escape hatch
+
+
+def test_ssh_config_refuses_when_any_workspace_is_on_a_non_managing_host(
+    monkeypatch: pytest.MonkeyPatch, fleet_config: Path
+) -> None:
+    _, _, _, cfg = _install(monkeypatch)
+    result = runner.invoke(app, ["ssh-config", "--config", str(fleet_config)])
+    assert result.exit_code == 1
+    assert "manages_workspaces" in result.output
+    assert cfg.written is None  # a command fails closed — nothing rendered
+
+
+def test_ls_annotates_a_non_managing_host_but_still_lists_the_rest(
+    monkeypatch: pytest.MonkeyPatch, fleet_config: Path
+) -> None:
+    # ls is a query (ADR-0004 §2): it surfaces the misconfig inline, never raises.
+    _install(monkeypatch, container=FakeContainerAccess(running=True))
+    result = runner.invoke(app, ["ls", "--config", str(fleet_config)])
+    assert result.exit_code == 0
+    lines = {ln.split()[0]: ln for ln in result.output.splitlines() if ln.strip()}
+    assert "running" in lines["gswa-backend"]  # the managing-host workspace still probed
+    assert "INVALID" in lines["on-fleet"]  # the fleet-host workspace flagged, not probed

@@ -58,6 +58,29 @@ docker_gpg_url = "https://download.docker.com/linux/ubuntu/gpg"
 docker_apt_url = "https://download.docker.com/linux/ubuntu"
 
 # ---------------------------------------------------------------------------------
+# A SECOND Host that billet does NOT run Workspaces on — the fleet-host (slice 7).
+#
+# billet manages this VM's lifecycle exactly like any other Host
+#   billet host up|stop|pin-ip --host fleet
+# but it carries no [workspaces.*]. Its runtime (an AFK fleet, in gswa's case) is owned
+# elsewhere; billet only brings the box up/down. `manages_workspaces = false` makes that
+# explicit and is ENFORCED: the workspace verbs (add/start/stop/connect/ssh-config) refuse
+# a Host with manages_workspaces=false, and `billet ls` flags any Workspace wrongly placed
+# on one as INVALID (see ADR-0004). Do not define [workspaces.*] with host = "fleet".
+# ---------------------------------------------------------------------------------
+# [hosts.fleet]
+# resource_group     = "GSWA-FLEET-HOST-RG"
+# vm_name            = "gswa-fleet-host"
+# location           = "westus3"
+# admin_user         = "azureuser"
+# vm_image           = "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
+# vm_size            = "Standard_D4s_v5"
+# public_ip_sku      = "Standard"
+# os_disk_gb         = 64
+# storage_sku        = "Premium_LRS"
+# manages_workspaces = false
+
+# ---------------------------------------------------------------------------------
 # [workspaces.<key>] — one table per repo devcontainer running on a Host.
 #
 # This table holds only billet's *operator intent* for a Workspace. The repo's container
