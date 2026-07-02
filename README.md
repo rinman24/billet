@@ -15,12 +15,12 @@ A stateless CLI that posts any repo's devcontainer to a shared cloud **Host** â€
   <a href="https://pypi.org/project/billet/"><picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/pypi-billet-C05CE0?style=flat&labelColor=3A2A4D&logo=pypi&logoColor=white">
     <img alt="PyPI" src="https://img.shields.io/badge/pypi-billet-C05CE0?style=flat&labelColor=17101F&logo=pypi&logoColor=white">
-  </picture></a>
-  <a href="#installation"><picture>
+  </picture></a><!--
+  --><a href="#installation"><picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/python-3.11%2B-9C8BB2?style=flat&labelColor=3A2A4D&logo=python&logoColor=white">
     <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-9C8BB2?style=flat&labelColor=17101F&logo=python&logoColor=white">
-  </picture></a>
-  <a href="LICENSE"><picture>
+  </picture></a><!--
+  --><a href="LICENSE"><picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/license-MIT-3FD2BE?style=flat&labelColor=3A2A4D">
     <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3FD2BE?style=flat&labelColor=17101F">
   </picture></a>
