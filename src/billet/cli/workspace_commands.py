@@ -95,8 +95,9 @@ def add(key: _KeyArgument, config: _ConfigOption = None) -> None:
     try:
         registry = _registry(config)
         spec = registry.workspace(key)
-        registry.host(spec.host)  # raises ConfigError if the referenced host is undefined
+        host = registry.host(spec.host)  # raises ConfigError if the referenced host is undefined
         manager = workspace_manager_factory()
+        manager.assert_placement(host)  # ADR-0004: refuse a manages_workspaces=false host
         block = manager.register(spec, _other_workspaces(registry, key))
         typer.echo(f"[billet] workspace '{key}' is valid:")
         typer.echo(block)
@@ -113,17 +114,25 @@ def ls(config: _ConfigOption = None) -> None:
     try:
         registry = _registry(config)
         manager = workspace_manager_factory()
-        items = [
-            (ws, _remote_via_alias(registry.host(ws.host), ws))
+        rows = [
+            (ws, registry.host(ws.host))
             for ws in (registry.workspace(k) for k in registry.workspace_keys())
         ]
-        statuses = manager.status_all(items)
-        if not statuses:
+        if not rows:
             typer.echo("[billet] no workspaces defined.")
             return
-        for status in statuses:
-            state = "running" if status.running else "stopped"
-            typer.echo(f"  {status.key:24} host={status.host:12} {state}")
+        # ls is a query, not a command (ADR-0004 §2): a Workspace on a non-managing Host is
+        # surfaced inline as INVALID rather than raising, and only managing Hosts are probed.
+        probeable = [
+            (ws, _remote_via_alias(host, ws)) for ws, host in rows if host.manages_workspaces
+        ]
+        running = {status.key: status.running for status in manager.status_all(probeable)}
+        for ws, host in rows:
+            if not host.manages_workspaces:
+                state = "INVALID (host manages_workspaces=false)"
+            else:
+                state = "running" if running[ws.key] else "stopped"
+            typer.echo(f"  {ws.key:24} host={ws.host:12} {state}")
     except BilletError as exc:
         _planio.fail(exc)
 
@@ -147,6 +156,7 @@ def start(
         provider = provider_factory(subscription_id)
         host_manager = HostManager(provider)
         manager = workspace_manager_factory()
+        manager.assert_placement(host)  # ADR-0004: refuse a manages_workspaces=false host
 
         host_plan = host_manager.plan_up(host)
         ws_plan = manager.plan_start(ws, verify=verify)
@@ -192,6 +202,7 @@ def stop(key: _KeyArgument, config: _ConfigOption = None, dry_run: _DryRunOption
         ws = registry.workspace(key)
         host = registry.host(ws.host)
         manager = workspace_manager_factory()
+        manager.assert_placement(host)  # ADR-0004: refuse a manages_workspaces=false host
         plan = manager.plan_stop(ws)
         _planio.render_workspace_plan(plan)
         if dry_run:
@@ -213,6 +224,7 @@ def connect(key: _KeyArgument, config: _ConfigOption = None) -> None:
         ws = registry.workspace(key)
         host = registry.host(ws.host)
         manager = workspace_manager_factory()
+        manager.assert_placement(host)  # ADR-0004: refuse a manages_workspaces=false host
         facts = manager.read_facts(ws, _remote_via_alias(host, ws))
         argv = manager.connect_target(ws, facts)
     except BilletError as exc:
@@ -231,10 +243,11 @@ def ssh_config(config: _ConfigOption = None, dry_run: _DryRunOption = False) -> 
         provider = provider_factory(subscription_id)
         manager = workspace_manager_factory()
         provider.preflight()
-        blocks = [
-            _block_for(provider, manager, registry.host(ws.host), ws)
-            for ws in (registry.workspace(k) for k in registry.workspace_keys())
-        ]
+        blocks: list[SshConfigBlock] = []
+        for ws in (registry.workspace(k) for k in registry.workspace_keys()):
+            host = registry.host(ws.host)
+            manager.assert_placement(host)  # ADR-0004: refuse a manages_workspaces=false host
+            blocks.append(_block_for(provider, manager, host, ws))
         if not blocks:
             typer.echo("[billet] no workspaces defined.")
             return

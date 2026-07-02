@@ -75,6 +75,12 @@ def test_vm_name_defaults_to_table_key(tmp_path: Path) -> None:
     assert host.nsg_name == "fleetNSG"
 
 
+def test_parses_explicit_manages_workspaces_false(tmp_path: Path) -> None:
+    text = _MINIMAL_HOST.format(key="fleet") + "manages_workspaces = false\n"
+    host = RegistryAccess(_write(tmp_path, text)).host("fleet")
+    assert host.manages_workspaces is False
+
+
 def test_parses_workspace_with_defaults(tmp_path: Path) -> None:
     ws = RegistryAccess(_write(tmp_path, _FULL_CONFIG)).workspace("gswa-backend")
     assert ws.host == "devbox"

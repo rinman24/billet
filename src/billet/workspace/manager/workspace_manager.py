@@ -16,6 +16,7 @@ import shlex
 from billet.contracts import (
     ContainerAccess,
     DevcontainerFacts,
+    HostSpec,
     RemoteHost,
     SourceAccess,
     SshConfigAccess,
@@ -28,6 +29,7 @@ from billet.contracts import (
 )
 from billet.infrastructure import ssh
 from billet.shared.errors import BilletError
+from billet.workspace.engine.placement import HostPlacementPolicy
 from billet.workspace.engine.port_allocator import PortAllocator
 from billet.workspace.engine.ssh_config_engine import SshConfigEngine
 
@@ -45,7 +47,21 @@ class WorkspaceManager:
         self._container = container
         self._ssh_config = ssh_config
         self._allocator = PortAllocator()
+        self._placement = HostPlacementPolicy()
         self._engine = SshConfigEngine()
+
+    # --- placement (command-verb precondition, ADR-0004) ---------------------------
+
+    def assert_placement(self, host: HostSpec) -> None:
+        """Raise ``ConfigError`` if ``host`` does not manage Workspaces.
+
+        The command verbs (``add``/``start``/``stop``/``connect``/``ssh-config``) call this
+        after resolving a Workspace's Host, so a Workspace can never be placed on a Host with
+        ``manages_workspaces = false`` (e.g. the fleet-host). ``billet host`` verbs never call
+        it, so a non-managing Host's VM lifecycle is unaffected. ``billet ls`` (a query) reads
+        the flag for its projection instead (ADR-0004 §2).
+        """
+        self._placement.assert_manages_workspaces(host)
 
     # --- register (billet add) -----------------------------------------------------
 
