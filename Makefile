@@ -1,4 +1,4 @@
-.PHONY: help install lint lint-scripts format imports test test-quick build docs-build docs-serve
+.PHONY: help install lint format imports test test-quick build docs-build docs-serve
 
 help:
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -10,9 +10,6 @@ install: ## Sync the locked dev environment (.venv)
 lint: ## Ruff check + Pyright (strict); must report 0 errors
 	uv run ruff check .
 	uv run pyright
-
-lint-scripts: ## Shellcheck the lifted devbox scripts
-	shellcheck --severity=warning scripts/devbox/*.sh
 
 format: ## Apply Ruff formatting
 	uv run ruff format .

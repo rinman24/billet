@@ -18,8 +18,8 @@ Both subsystems ship in Python. The **Host** subsystem drives the VM behind the
 `HostProvider` seam (`billet host up|stop|pin-ip`), with a dry-run plan and a confirm gate on
 billable cold-create. The **Workspace** subsystem clones, builds, bootstraps, and connects a
 repo's devcontainer on a Host (`billet add|ls|start|stop|connect|ssh-config|rm`), reading each
-repo's `.devcontainer/devcontainer.json` as a read-only data contract. The lifted cloud-devbox
-shell scripts (`scripts/devbox/`) remain as a fallback until they are removed in slice 6. The
+repo's `.devcontainer/devcontainer.json` as a read-only data contract. The Python tool now
+fully replaces the original cloud-devbox shell scripts, which have been removed. The
 architecture is recorded in
 [ADR-0001](docs/adr/adr-0001-closed-architecture-decomposition.md) and
 [ADR-0002](docs/adr/adr-0002-workspace-subsystem.md).

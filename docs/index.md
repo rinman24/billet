@@ -38,5 +38,5 @@ contract in [ADR-0003](adr/adr-0003-workspace-port-binding-contract.md).
 Both subsystems run in Python. The Host subsystem (`billet host up|stop|pin-ip`) drives the
 VM; the Workspace subsystem (`billet add|ls|start|stop|connect|ssh-config|rm`) clones,
 builds, bootstraps, and connects a repo's devcontainer on a Host, reading each repo's
-`.devcontainer/devcontainer.json` as a read-only data contract. The lifted cloud-devbox
-shell scripts in `scripts/devbox/` remain as a fallback until they are removed in slice 6.
+`.devcontainer/devcontainer.json` as a read-only data contract. The Python tool now fully
+replaces the original cloud-devbox shell scripts, which have been removed.

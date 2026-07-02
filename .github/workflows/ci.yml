@@ -1,8 +1,7 @@
 # billet CI — lint + strict type-check + import contract + tests on every PR into main.
 #
 # Fully self-contained: no secrets, no services. uv provisions Python 3.11 (per
-# .python-version) and the dev tools from the locked uv.lock. shellcheck (preinstalled
-# on ubuntu-latest) lints the lifted devbox scripts.
+# .python-version) and the dev tools from the locked uv.lock.
 name: CI
 
 on:
@@ -56,12 +55,6 @@ jobs:
         run: |
           set -euo pipefail
           uv run lint-imports
-
-      - name: Shellcheck (lifted devbox scripts)
-        shell: bash
-        run: |
-          set -euo pipefail
-          shellcheck --severity=warning scripts/devbox/*.sh
 
       - name: Pytest
         shell: bash

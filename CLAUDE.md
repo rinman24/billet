@@ -40,7 +40,6 @@ Ubiquitous language: **Host** (a cloud VM), **Workspace** (a repo's devcontainer
 - `make lint` (ruff + pyright strict) — 0 errors
 - `make imports` (import-linter layer contract)
 - `make test`
-- `make lint-scripts` when the lifted `scripts/devbox/*` change
 
 ## Git
 
