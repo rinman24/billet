@@ -1,8 +1,44 @@
 site_name: billet
 site_description: A stateless manager for cloud Hosts and devcontainer Workspaces.
+site_url: https://rinman24.github.io/billet/
 repo_url: https://github.com/rinman24/billet
+repo_name: rinman24/billet
+
 theme:
-  name: readthedocs
+  name: material
+  custom_dir: overrides
+  logo: brand/logo/mark-on-dark.svg        # mark-only SVG: pure vector, no webfont text
+  favicon: brand/favicon/favicon.svg
+  font:
+    text: Space Grotesk
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.instant
+    - navigation.top
+    - navigation.sections
+    - toc.follow
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+
+extra_css:
+  - brand/assets/brand.css
+
 nav:
   - Home: index.md
   - Architecture Decisions:
