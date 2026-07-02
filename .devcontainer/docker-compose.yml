@@ -1,0 +1,41 @@
+services:
+  billet:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+      target: development
+    volumes:
+      # The repo, bind-mounted for live editing. uid 1000 on both sides (VM azureuser ↔
+      # container dev) keeps ownership aligned with no chown. The project venv lives at
+      # /workspace/.venv inside this mount; postCreateCommand runs `uv sync --frozen`.
+      - ..:/workspace:cached
+      # Persist Claude Code auth + auto-memory across image rebuilds.
+      - billet_claude_home:/home/dev/.claude
+      # Persist the `az login` (Entra) refresh token so az paperwork stays keyless.
+      - billet_azure_home:/home/dev/.azure
+      # Container sshd trusts the operator's forwarded key via a read-only bind-mount of
+      # the VM's existing authorized_keys — single source of trust. Defaults to an empty
+      # tracked stub so a non-VM build never hard-fails. On the VM set
+      # DEVBOX_AUTHORIZED_KEYS in the gitignored .devcontainer/.env (see .env.example).
+      - ${DEVBOX_AUTHORIZED_KEYS:-./authorized_keys-stub}:/home/dev/.ssh/authorized_keys:ro
+      # Persisted container SSH host keys → stable identity across rebuild/recreate
+      # (stable HostKeyAlias, no known_hosts churn). Generated on first boot if absent.
+      - billet-sshd-keys:/etc/ssh/host_keys
+    # Bring up the in-container sshd, then run the CMD (`sleep infinity`). `bash <script>`
+    # avoids any dependence on the bind-mounted file's exec bit.
+    entrypoint: ["bash", "/workspace/.devcontainer/dev-entrypoint.sh"]
+    command: sleep infinity
+    # docker-init (tini) as PID 1 reaps sshd's re-parented per-connection children.
+    init: true
+    # In-container sshd published to the VM loopback ONLY (never internet-facing, so the
+    # Host NSG stays a single :22→operator-IP rule). The port is billet's assigned
+    # loopback port, passed in as BILLET_CONTAINER_SSH_PORT before every compose call
+    # (ADR-0003). It MUST be interpolated so it doesn't collide with gswa's fixed 2222;
+    # the `:-2222` default only applies when run outside billet.
+    ports:
+      - "127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-2222}:22"
+
+volumes:
+  billet_claude_home:
+  billet_azure_home:
+  billet-sshd-keys:

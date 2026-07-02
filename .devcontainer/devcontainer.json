@@ -1,0 +1,44 @@
+{
+    "name": "billet Development Container",
+    "dockerComposeFile": "docker-compose.yml",
+    "service": "billet",
+    "workspaceFolder": "/workspace",
+    "remoteUser": "dev",
+    // billet uses the default in-repo .venv (gitignored), which the bind mount shadows,
+    // so populate it once at container creation. `make install` does the same thing if
+    // you bring the container up with bare `docker compose up` instead of VS Code/billet.
+    "postCreateCommand": "uv sync --frozen",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "[python]": {
+                    "editor.defaultFormatter": "charliermarsh.ruff",
+                    "editor.formatOnSave": true,
+                    "editor.codeActionsOnSave": {
+                        "source.organizeImports.ruff": "explicit"
+                    }
+                },
+                "coverage-gutters.showGutterCoverage": false,
+                "coverage-gutters.showLineCoverage": true,
+                "explorer.compactFolders": false,
+                "python.analysis.typeCheckingMode": "off",
+                "python.defaultInterpreterPath": "/workspace/.venv/bin/python",
+                "python.languageServer": "Pylance",
+                "python.testing.pytestArgs": [
+                    "--no-cov",
+                    "tests"
+                ],
+                "python.testing.pytestEnabled": true,
+                "python.testing.unittestEnabled": false
+            },
+            "extensions": [
+                "anthropic.claude-code",
+                "charliermarsh.ruff",
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "ms-vscode-remote.remote-containers",
+                "ryanluker.vscode-coverage-gutters"
+            ]
+        }
+    }
+}

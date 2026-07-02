@@ -31,3 +31,6 @@ scripts/devbox/*.log
 # Editor / OS
 .DS_Store
 *.swp
+
+# devcontainer local operator env (VM-specific, never committed)
+.devcontainer/.env
