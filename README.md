@@ -10,20 +10,15 @@
 A stateless CLI that posts any repo's devcontainer to a shared cloud **Host** — from the command line.
 
 <!-- style=flat rounds the badge corners (berth shape); each <picture> lifts the
-     label color from aubergine to violet in GitHub dark mode so the left side stays legible -->
+     label color from aubergine to violet in GitHub dark mode so the left side stays legible.
+     Keep each <a><picture>…</picture></a> on ONE line: a newline between <picture> and its
+     <img> renders as a leading space inside the link, which GitHub underlines (a stray line
+     under each badge). The single space between the anchors is outside the links, so it just
+     spaces the badges without underlining. -->
 <p>
-  <a href="https://pypi.org/project/billet/"><picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/pypi-billet-C05CE0?style=flat&labelColor=3A2A4D&logo=pypi&logoColor=white">
-    <img alt="PyPI" src="https://img.shields.io/badge/pypi-billet-C05CE0?style=flat&labelColor=17101F&logo=pypi&logoColor=white">
-  </picture></a><!--
-  --><a href="#installation"><picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/python-3.11%2B-9C8BB2?style=flat&labelColor=3A2A4D&logo=python&logoColor=white">
-    <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-9C8BB2?style=flat&labelColor=17101F&logo=python&logoColor=white">
-  </picture></a><!--
-  --><a href="LICENSE"><picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/license-MIT-3FD2BE?style=flat&labelColor=3A2A4D">
-    <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3FD2BE?style=flat&labelColor=17101F">
-  </picture></a>
+  <a href="https://pypi.org/project/billet/"><picture><source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/pypi-billet-C05CE0?style=flat&labelColor=3A2A4D&logo=pypi&logoColor=white"><img alt="PyPI" src="https://img.shields.io/badge/pypi-billet-C05CE0?style=flat&labelColor=17101F&logo=pypi&logoColor=white"></picture></a>
+  <a href="#installation"><picture><source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/python-3.11%2B-9C8BB2?style=flat&labelColor=3A2A4D&logo=python&logoColor=white"><img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-9C8BB2?style=flat&labelColor=17101F&logo=python&logoColor=white"></picture></a>
+  <a href="LICENSE"><picture><source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/license-MIT-3FD2BE?style=flat&labelColor=3A2A4D"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3FD2BE?style=flat&labelColor=17101F"></picture></a>
 </p>
 
 <sub><a href="#installation">Install</a> &nbsp;·&nbsp; <a href="#quick-start">Quick start</a> &nbsp;·&nbsp; <a href="#commands">Commands</a> &nbsp;·&nbsp; <a href="https://rinman24.github.io/billet/brand/guidelines.html">Brand</a> &nbsp;·&nbsp; <a href="https://github.com/rinman24/billet">Source</a></sub>
