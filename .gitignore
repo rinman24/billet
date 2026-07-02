@@ -11,6 +11,9 @@ build/
 dist/
 site/
 
+# Docs: brand kit is copied in from repo-root brand/ at build time (see `make docs-build`)
+docs/brand/
+
 # Test / type-checker caches
 .pytest_cache/
 .ruff_cache/

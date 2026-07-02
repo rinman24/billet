@@ -1,0 +1,24 @@
+/* billet brand -> Material palette. Source of truth: brand/BRAND.md
+   Core scheme only; surface/mint/muted fidelity is a follow-up against the live site. */
+
+/* Dark scheme (slate) -- aubergine ground */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color:        #17101F;  /* aubergine */
+  --md-primary-fg-color--light: #211829;  /* surface */
+  --md-primary-fg-color--dark:  #17101F;
+  --md-accent-fg-color:         #C05CE0;  /* magenta = the one action */
+  --md-default-bg-color:        #17101F;
+  --md-default-fg-color:        #EDE6F2;  /* ink */
+  --md-typeset-a-color:         #C05CE0;
+}
+
+/* Light scheme (default) -- paper ground, aubergine header */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:        #17101F;  /* aubergine */
+  --md-primary-fg-color--light: #211829;
+  --md-primary-fg-color--dark:  #17101F;
+  --md-accent-fg-color:         #C05CE0;  /* magenta */
+  --md-default-bg-color:        #FAF9F7;  /* paper */
+  --md-default-fg-color:        #141414;  /* ink (light) */
+  --md-typeset-a-color:         #C05CE0;
+}

@@ -1,4 +1,4 @@
-.PHONY: help install lint format imports test test-quick build docs-build docs-serve
+.PHONY: help install lint format imports test test-quick build docs-assets docs-build docs-serve
 
 help:
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -26,8 +26,12 @@ test-quick: ## Run the test suite without coverage
 build: ## Build sdist + wheel
 	uv build
 
-docs-build: ## Build the MkDocs site
-	uv run mkdocs build
+docs-assets: ## Copy the brand kit into docs/ (generated; gitignored)
+	rm -rf docs/brand
+	cp -R brand docs/brand
 
-docs-serve: ## Serve the docs locally
+docs-build: docs-assets ## Build the MkDocs site (strict)
+	uv run mkdocs build --strict
+
+docs-serve: docs-assets ## Serve the docs locally
 	uv run mkdocs serve

@@ -52,13 +52,17 @@ packages = ["src/billet"]
 include = ["src/billet", "tests", "README.md", "CLAUDE.md", "LICENSE"]
 
 [dependency-groups]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+]
 dev = [
     "ruff>=0.11",
     "pyright>=1.1.390",
     "pytest>=8",
     "pytest-cov>=7.1.0",
     "import-linter>=2.1",
-    "mkdocs>=1.6",
+    { include-group = "docs" },
 ]
 
 [tool.ruff]
