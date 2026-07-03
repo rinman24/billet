@@ -22,6 +22,10 @@ subscription_id = "00000000-0000-0000-0000-000000000000"
 # Optional. The host used when a `billet host …` command omits --host. If unset and
 # more than one host is defined, --host is required.
 default_host = "devbox"
+# Optional. Your personal in-container bootstrap, run in every Workspace's service
+# container right after the devcontainer's postCreateCommand at `billet start` time
+# (e.g. clone + install your dotfiles). Empty (the default) disables it.
+# personal_bootstrap_cmd = "git clone https://github.com/me/dotfiles ~/dotfiles && bash ~/dotfiles/install.sh"
 
 # ---------------------------------------------------------------------------------
 # [hosts.<key>] — one table per cloud Host (a VM). The table key (here "devbox") is

@@ -95,7 +95,11 @@ class RegistryAccess:
         default_host = table.get("default_host")
         if default_host is not None and not isinstance(default_host, str):
             raise ConfigError(f"{ctx}: key 'default_host' must be a string")
-        return GlobalConfig(subscription_id=subscription_id, default_host=default_host)
+        return GlobalConfig(
+            subscription_id=subscription_id,
+            default_host=default_host,
+            personal_bootstrap_cmd=self._str(table, "personal_bootstrap_cmd", ctx, default=""),
+        )
 
     def host_keys(self) -> list[str]:
         """Return the sorted logical keys of every ``[hosts.*]`` table."""

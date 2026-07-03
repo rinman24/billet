@@ -75,6 +75,7 @@ class WorkspaceStepKind(Enum):
     ENSURE_SOURCE = "ensure_source"
     COMPOSE_UP = "compose_up"
     POST_CREATE = "post_create"
+    PERSONAL_BOOTSTRAP = "personal_bootstrap"
     VERIFY = "verify"
     COMPOSE_STOP = "compose_stop"
 
@@ -140,6 +141,12 @@ class ContainerAccess(Protocol):
         self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts
     ) -> None:
         """Run the devcontainer ``postCreateCommand`` inside the service container."""
+        ...
+
+    def run_personal_bootstrap(
+        self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts, command: str
+    ) -> None:
+        """Run the operator's ``personal_bootstrap_cmd`` inside the service container."""
         ...
 
     def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:

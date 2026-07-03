@@ -152,14 +152,16 @@ def start(
         registry = _registry(config)
         ws = registry.workspace(key)
         host = registry.host(ws.host)
-        subscription_id = registry.global_config().subscription_id
-        provider = provider_factory(subscription_id)
+        global_config = registry.global_config()
+        provider = provider_factory(global_config.subscription_id)
         host_manager = HostManager(provider)
         manager = workspace_manager_factory()
         manager.assert_placement(host)  # ADR-0004: refuse a manages_workspaces=false host
 
         host_plan = host_manager.plan_up(host)
-        ws_plan = manager.plan_start(ws, verify=verify)
+        ws_plan = manager.plan_start(
+            ws, verify=verify, personal_bootstrap_cmd=global_config.personal_bootstrap_cmd
+        )
 
         if dry_run:
             _planio.render_plan(host_plan)
@@ -174,7 +176,9 @@ def start(
 
         # Workspace phase.
         _planio.render_workspace_plan(ws_plan)
-        manager.apply_start(ws_plan, ws, remote)
+        manager.apply_start(
+            ws_plan, ws, remote, personal_bootstrap_cmd=global_config.personal_bootstrap_cmd
+        )
         typer.echo(
             f"[billet] workspace '{key}' is up. "
             f"Run `billet ssh-config` then `billet connect {key}`."

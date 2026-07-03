@@ -121,6 +121,14 @@ class ComposeContainerAccess:
         script = self._exec_script(spec, facts, facts.post_create_command)
         self._run_script(remote, script)
 
+    def run_personal_bootstrap(
+        self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts, command: str
+    ) -> None:
+        """Run the operator's ``personal_bootstrap_cmd`` in the service container (if set)."""
+        if not command:
+            return
+        self._run_script(remote, self._exec_script(spec, facts, command))
+
     def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
         """Run the Workspace's ``verify_cmd`` in the service container."""
         self._run_script(remote, self._exec_script(spec, facts, spec.verify_cmd))

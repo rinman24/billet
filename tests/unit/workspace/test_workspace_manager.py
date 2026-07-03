@@ -72,7 +72,7 @@ def test_plan_start_appends_verify_when_requested() -> None:
 def test_apply_start_clones_reads_facts_then_drives_compose_in_order() -> None:
     manager, source, container, _ = _manager()
     plan = manager.plan_start(SPEC, verify=True)
-    facts = manager.apply_start(plan, SPEC, REMOTE)
+    facts = manager.apply_start(plan, SPEC, REMOTE, personal_bootstrap_cmd="")
     assert source.calls == [("gswa-backend", "20.0.0.5")]
     assert container.calls == ["read_facts", "compose_up", "run_post_create", "verify"]
     assert facts.service == "gswa-backend"
@@ -81,8 +81,41 @@ def test_apply_start_clones_reads_facts_then_drives_compose_in_order() -> None:
 def test_apply_start_without_verify_skips_verify() -> None:
     manager, _, container, _ = _manager()
     plan = manager.plan_start(SPEC, verify=False)
-    manager.apply_start(plan, SPEC, REMOTE)
+    manager.apply_start(plan, SPEC, REMOTE, personal_bootstrap_cmd="")
     assert "verify" not in container.calls
+
+
+def test_plan_start_slots_personal_bootstrap_between_post_create_and_verify() -> None:
+    manager, *_ = _manager()
+    plan = manager.plan_start(SPEC, verify=True, personal_bootstrap_cmd="bash install.sh")
+    assert [s.kind for s in plan.steps] == [
+        WorkspaceStepKind.ENSURE_SOURCE,
+        WorkspaceStepKind.COMPOSE_UP,
+        WorkspaceStepKind.POST_CREATE,
+        WorkspaceStepKind.PERSONAL_BOOTSTRAP,
+        WorkspaceStepKind.VERIFY,
+    ]
+
+
+def test_apply_start_runs_personal_bootstrap_after_post_create() -> None:
+    manager, _, container, _ = _manager()
+    plan = manager.plan_start(SPEC, verify=False, personal_bootstrap_cmd="bash install.sh")
+    manager.apply_start(plan, SPEC, REMOTE, personal_bootstrap_cmd="bash install.sh")
+    assert container.calls == [
+        "read_facts",
+        "compose_up",
+        "run_post_create",
+        "run_personal_bootstrap",
+    ]
+    assert container.personal_bootstrap_cmds == ["bash install.sh"]
+
+
+def test_start_skips_personal_bootstrap_when_empty() -> None:
+    manager, _, container, _ = _manager()
+    plan = manager.plan_start(SPEC, verify=False)
+    assert WorkspaceStepKind.PERSONAL_BOOTSTRAP not in {s.kind for s in plan.steps}
+    manager.apply_start(plan, SPEC, REMOTE, personal_bootstrap_cmd="")
+    assert "run_personal_bootstrap" not in container.calls
 
 
 # --- stop --------------------------------------------------------------------------

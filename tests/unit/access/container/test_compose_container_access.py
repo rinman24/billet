@@ -1,12 +1,13 @@
 """Tests for ComposeContainerAccess — devcontainer.json parsing + compose argv over SSH."""
 
 from collections.abc import Callable
+import shlex
 
 import pytest
 
 from billet.access.container.compose_container_access import ComposeContainerAccess
 from billet.infrastructure.process import CompletedProcess
-from billet.shared.errors import ConfigError
+from billet.shared.errors import ConfigError, ProcessError
 from tests.unit._fakes import (
     FakeProcessRunner,
     completed,
@@ -130,6 +131,7 @@ def test_every_compose_op_exports_the_port() -> None:
     access, runner = _access(lambda _argv: completed(stdout="abc\n"))
     access.compose_up(spec, REMOTE, FACTS)
     access.run_post_create(spec, REMOTE, FACTS)
+    access.run_personal_bootstrap(spec, REMOTE, FACTS, "bash ~/dotfiles/install.sh")
     access.verify(spec, REMOTE, FACTS)
     access.compose_stop(spec, REMOTE, FACTS)
     access.is_running(spec, REMOTE, FACTS)
@@ -150,6 +152,42 @@ def test_run_post_create_is_a_noop_when_absent() -> None:
     access, runner = _access(lambda _argv: completed())
     access.run_post_create(SPEC, REMOTE, make_devcontainer_facts(post_create_command=None))
     assert runner.calls == []
+
+
+def test_run_personal_bootstrap_execs_in_service_container() -> None:
+    access, runner = _access(lambda _argv: completed())
+    command = "git clone git@github.com:me/dotfiles.git ~/dotfiles && bash ~/dotfiles/install.sh"
+    access.run_personal_bootstrap(SPEC, REMOTE, FACTS, command)
+    script = runner.inputs[-1]
+    assert script is not None
+    assert (
+        "docker compose -f .devcontainer/docker-compose.yml "
+        f"exec -T gswa-backend bash -lc '{command}'"
+    ) in script
+    # Runs non-interactively over `bash -se` on the host, like the other phases.
+    assert runner.commands()[-1].endswith("bash -se")
+
+
+def test_run_personal_bootstrap_quotes_embedded_single_quotes() -> None:
+    access, runner = _access(lambda _argv: completed())
+    command = "echo 'hi' && cd $HOME"
+    access.run_personal_bootstrap(SPEC, REMOTE, FACTS, command)
+    script = runner.inputs[-1]
+    assert script is not None
+    # shlex's '"'"' escaping keeps the quotes and $HOME literal through the outer bash -lc.
+    assert shlex.quote(command) in script
+
+
+def test_run_personal_bootstrap_is_a_noop_when_empty() -> None:
+    access, runner = _access(lambda _argv: completed())
+    access.run_personal_bootstrap(SPEC, REMOTE, FACTS, "")
+    assert runner.calls == []
+
+
+def test_run_personal_bootstrap_failure_propagates() -> None:
+    access, _ = _access(lambda _argv: completed(returncode=1, stderr="install failed"))
+    with pytest.raises(ProcessError):
+        access.run_personal_bootstrap(SPEC, REMOTE, FACTS, "bash ~/dotfiles/install.sh")
 
 
 def test_verify_execs_verify_cmd_in_service_container() -> None:
