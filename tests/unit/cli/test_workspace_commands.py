@@ -203,7 +203,9 @@ def test_connect_execs_tmux_argv(monkeypatch: pytest.MonkeyPatch, config_file: P
     assert argv[0] == "ssh"
     assert "-t" in argv
     assert "gswa-container" in argv
-    assert argv[-1] == "cd /app && exec tmux new-session -A -s main bash -l"
+    assert argv[-1] == (
+        "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 tmux new-session -A -s main bash -l"
+    )
 
 
 # --- ssh-config --------------------------------------------------------------------

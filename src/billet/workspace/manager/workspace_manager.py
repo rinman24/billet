@@ -149,10 +149,18 @@ class WorkspaceManager:
         Mirrors the lifted ``connect.sh``: a plain ``ssh -t`` through the container alias
         (which the ssh-config resolves via ``ProxyJump`` with the agent forwarded), attaching
         to — or creating — a single named tmux session at the workspace folder.
+
+        The locale is pinned to ``C.UTF-8``: sshd sessions do not inherit the container
+        image's Docker ``ENV``, and a client-forwarded ``LANG``/``LC_*`` (macOS sends them
+        by default) usually names a locale the container never generated — either way tmux
+        starts non-UTF-8 and renders every non-ASCII cell as ``_``. ``C.UTF-8`` is built
+        into glibc, needs no locale-gen, and overrides any forwarded ``LC_*`` via
+        ``LC_ALL``, so tmux and everything inside it always run UTF-8.
         """
         remote_command = (
             f"cd {shlex.quote(facts.workspace_folder)} && "
-            f"exec tmux new-session -A -s {shlex.quote(spec.tmux_session)} bash -l"
+            "exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 "
+            f"tmux new-session -A -s {shlex.quote(spec.tmux_session)} bash -l"
         )
         # user=None: the container alias in ssh-config already supplies user/host/port.
         return ssh.ssh_argv(None, spec.container_alias, remote_command, tty=True)
