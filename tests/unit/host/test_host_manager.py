@@ -5,7 +5,7 @@ import pytest
 from billet.contracts import HostPowerState, HostStatus, StepKind
 from billet.host.manager.host_manager import HostManager
 from billet.shared.errors import HostOperationError
-from tests.unit._fakes import FakeHostProvider, make_host_spec
+from tests.unit._fakes import FakeHostProvider, FakeMetricsAccess, make_host_spec
 
 SPEC = make_host_spec()
 
@@ -80,6 +80,30 @@ def test_plan_pin_ip_pins_only_without_reading_status() -> None:
     plan = HostManager(provider).plan_pin_ip(SPEC)
     assert [s.kind for s in plan.steps] == [StepKind.PIN_INBOUND]
     assert provider.calls == ["preflight"]
+
+
+def test_read_metrics_probes_the_running_host() -> None:
+    provider = FakeHostProvider(_status(HostPowerState.RUNNING, "1.2.3.4", "VM running"))
+    metrics_access = FakeMetricsAccess()
+    status, metrics = HostManager(provider).read_metrics(SPEC, metrics_access)
+    assert provider.calls == ["preflight", "status"]
+    assert status.public_ip == "1.2.3.4"
+    assert [(r.admin_user, r.ip) for r in metrics_access.remotes] == [("azureuser", "1.2.3.4")]
+    assert metrics.cpu.cores == 4
+
+
+def test_read_metrics_not_running_raises_without_probing() -> None:
+    provider = FakeHostProvider(_status(HostPowerState.DEALLOCATED, raw="VM deallocated"))
+    metrics_access = FakeMetricsAccess()
+    with pytest.raises(HostOperationError, match="not running"):
+        HostManager(provider).read_metrics(SPEC, metrics_access)
+    assert metrics_access.remotes == []
+
+
+def test_read_metrics_running_without_ip_raises() -> None:
+    provider = FakeHostProvider(_status(HostPowerState.RUNNING, None, "VM running"))
+    with pytest.raises(HostOperationError, match="not running"):
+        HostManager(provider).read_metrics(SPEC, FakeMetricsAccess())
 
 
 def test_apply_dispatches_each_step_to_provider_in_order() -> None:

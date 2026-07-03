@@ -5,7 +5,18 @@ The manager *plans* (reads live state, composes an ordered :class:`Plan`) and *a
 billable-create confirm live in the client. See ADR-0001.
 """
 
-from billet.contracts import HostPowerState, HostProvider, HostSpec, Plan, PlanStep, StepKind
+from billet.contracts import (
+    HostMetrics,
+    HostPowerState,
+    HostProvider,
+    HostSpec,
+    HostStatus,
+    MetricsAccess,
+    Plan,
+    PlanStep,
+    RemoteHost,
+    StepKind,
+)
 from billet.shared.errors import HostOperationError
 
 
@@ -89,6 +100,26 @@ class HostManager:
         """Build the plan to re-pin the inbound SSH rule to the operator's current /32."""
         self._provider.preflight()
         return Plan(host_key=spec.key, steps=(_pin_step(spec),))
+
+    def read_metrics(
+        self, spec: HostSpec, metrics: MetricsAccess
+    ) -> tuple[HostStatus, HostMetrics]:
+        """Probe a running host's live usage (a query — no plan, nothing is changed).
+
+        Raises
+        ------
+        HostOperationError
+            If the host is not running (there is nothing to probe).
+        """
+        self._provider.preflight()
+        status = self._provider.status(spec)
+        if status.power_state is not HostPowerState.RUNNING or status.public_ip is None:
+            raise HostOperationError(
+                f"VM {spec.vm_name} is not running ({status.raw_power or 'not found'}) — "
+                "bring it up with `billet host up` first."
+            )
+        remote = RemoteHost(admin_user=spec.admin_user, ip=status.public_ip)
+        return status, metrics.read(remote)
 
     def apply(self, plan: Plan, spec: HostSpec) -> None:
         """Execute each step in order against the provider."""

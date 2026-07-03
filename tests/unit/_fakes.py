@@ -5,10 +5,15 @@ from dataclasses import replace
 from typing import Any
 
 from billet.contracts import (
+    ContainerMetrics,
+    CpuMetrics,
     DevcontainerFacts,
+    DiskMetrics,
+    HostMetrics,
     HostPowerState,
     HostSpec,
     HostStatus,
+    MemoryMetrics,
     RemoteHost,
     WorkspaceSpec,
 )
@@ -152,6 +157,46 @@ class FakeHostProvider:
 
     def ensure_tags(self, spec: HostSpec) -> None:
         self.calls.append("ensure_tags")
+
+
+_DEFAULT_HOST_METRICS = HostMetrics(
+    cpu=CpuMetrics(cores=4, load_1m=0.42, load_5m=0.31, load_15m=0.20),
+    memory=MemoryMetrics(total_bytes=16 * 2**30, available_bytes=12 * 2**30),
+    disks=(
+        DiskMetrics(
+            mount="/",
+            size_bytes=64 * 2**30,
+            used_bytes=46 * 2**30,
+            available_bytes=18 * 2**30,
+        ),
+    ),
+    containers=(
+        ContainerMetrics(
+            name="gswa-backend",
+            status="Up 3 hours",
+            cpu_percent="0.15%",
+            mem_usage="1.2GiB / 15.6GiB",
+            mem_percent="7.7%",
+        ),
+    ),
+)
+
+
+def make_host_metrics(**overrides: Any) -> HostMetrics:
+    """Return the canonical test HostMetrics with any field overridden."""
+    return replace(_DEFAULT_HOST_METRICS, **overrides)
+
+
+class FakeMetricsAccess:
+    """A MetricsAccess that records each probed remote and returns fixed metrics."""
+
+    def __init__(self, metrics: HostMetrics | None = None) -> None:
+        self._metrics = metrics or _DEFAULT_HOST_METRICS
+        self.remotes: list[RemoteHost] = []
+
+    def read(self, remote: RemoteHost) -> HostMetrics:
+        self.remotes.append(remote)
+        return self._metrics
 
 
 class FakeSourceAccess:

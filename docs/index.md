@@ -35,7 +35,7 @@ contract in [ADR-0003](adr/adr-0003-workspace-port-binding-contract.md).
 
 ## Status
 
-Both subsystems run in Python. The Host subsystem (`billet host up|stop|pin-ip`) drives the
+Both subsystems run in Python. The Host subsystem (`billet host up|stop|pin-ip|specs`) drives the
 VM; the Workspace subsystem (`billet add|ls|start|stop|connect|ssh-config|rm`) clones,
 builds, bootstraps, and connects a repo's devcontainer on a Host, reading each repo's
 `.devcontainer/devcontainer.json` as a read-only data contract. The Python tool now fully
