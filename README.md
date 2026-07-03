@@ -55,6 +55,26 @@ uv tool install git+https://github.com/rinman24/billet
 
 (PyPI publication is deferred; install from GitHub for now.)
 
+### PATH setup
+
+`uv tool install` places the `billet` executable in `~/.local/bin`. If your shell
+reports `billet: command not found`, that directory is not on your `PATH`. Fix it with
+uv's own helper, then open a new terminal:
+
+```bash
+uv tool update-shell
+```
+
+Or add the directory to your shell profile manually (zsh shown):
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+```
+
+If `billet` is still not found after opening a new terminal, your shell may not be
+sourcing the file that was edited — check `echo $ZDOTDIR` and inspect your `.zshenv`,
+`.zprofile`, or `/etc/zshenv` for a config-directory redirect.
+
 ## Usage
 
 ```bash
