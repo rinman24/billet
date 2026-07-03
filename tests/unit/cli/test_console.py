@@ -6,7 +6,6 @@ degrade to one sequential log line per event with no ANSI live artifacts.
 """
 
 import io
-import time
 
 from rich.console import Console
 
@@ -71,7 +70,7 @@ def test_non_terminal_degrades_to_plain_sequential_lines() -> None:
 def test_planning_status_shows_spinner_text_on_a_terminal() -> None:
     console = _terminal_console()
     with planning_status(console):
-        time.sleep(0.25)  # let the status auto-refresh paint at least one frame
+        pass  # the first frame paints synchronously — no refresh-thread timing to wait on
     assert "planning" in console.export_text()
 
 

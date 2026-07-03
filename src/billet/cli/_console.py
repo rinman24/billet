@@ -96,9 +96,7 @@ class PlanRenderer:
     def __enter__(self) -> Self:
         """Start the Live checklist (terminal only) and return self as the observer."""
         if self._console.is_terminal:
-            self._live = Live(
-                self._checklist(), console=self._console, refresh_per_second=12.5
-            )
+            self._live = Live(self._checklist(), console=self._console, refresh_per_second=12.5)
             self._live.start()
         return self
 
@@ -158,12 +156,19 @@ def planning_status(console: Console | None = None) -> Generator[None]:
     """Show a planning spinner for the pre-plan phase (silent when not a terminal).
 
     Wrap plan construction (registry reads plus the provider's ``az`` round-trips) in
-    this so the operator sees activity before the plan renders. When stdout is not a
-    terminal the body simply runs with no output.
+    this so the operator sees activity before the plan renders. The first frame paints
+    synchronously (``Console.status`` would leave it to the refresh thread, so a fast
+    body could exit before anything showed). When stdout is not a terminal the body
+    simply runs with no output.
     """
     active = console if console is not None else get_console()
     if not active.is_terminal:
         yield
         return
-    with active.status(Text("[billet] planning…")):
+    spinner = Spinner("dots", text=Text("[billet] planning…"), style="status.spinner")
+    live = Live(spinner, console=active, refresh_per_second=12.5, transient=True)
+    live.start(refresh=True)
+    try:
         yield
+    finally:
+        live.stop()

@@ -11,7 +11,8 @@ from typer.testing import CliRunner
 
 from billet.cli import host_commands
 from billet.cli.app import app
-from billet.contracts import HostPowerState, HostProvider, HostStatus
+from billet.contracts import HostPowerState, HostProvider, HostSpec, HostStatus
+from billet.shared.errors import HostOperationError
 from tests.unit._fakes import FakeHostProvider
 
 runner = CliRunner()
@@ -100,6 +101,25 @@ def test_up_resume_applies_without_a_prompt(
     assert result.exit_code == 0
     assert "start" in provider.calls
     assert "create" not in provider.calls
+
+
+def test_up_apply_failure_marks_the_step_failed_before_the_error(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    class ExplodingProvider(FakeHostProvider):
+        def start(self, spec: HostSpec) -> None:
+            super().start(spec)
+            raise HostOperationError("az start failed")
+
+    provider = ExplodingProvider(HostStatus(HostPowerState.DEALLOCATED, None, ""))
+    _install(monkeypatch, provider)
+    result = runner.invoke(app, ["host", "up", "--config", str(config_file)])
+    assert result.exit_code == 1
+    lines = result.output.splitlines()
+    failed = next(index for index, line in enumerate(lines) if "✗ start VM" in line)
+    error = next(index for index, line in enumerate(lines) if "error: az start failed" in line)
+    assert failed < error  # the red ✗ lands before the error report
+    assert "wait_until_reachable" not in provider.calls  # later steps never ran
 
 
 def test_stop_already_deallocated_reports_nothing_to_do(
