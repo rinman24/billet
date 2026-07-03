@@ -19,14 +19,14 @@ from rich.theme import Theme
 
 from billet.contracts import PlanStep, WorkspacePlanStep
 
-# Semantic style names for plan progress. Placeholder colors for now — the billet brand
-# colors are swapped here (and only here) when the palette lands.
+# Semantic style names for plan progress, mapped to the billet brand palette. This dict
+# is the single place brand colors live.
 BILLET_THEME = Theme(
     {
-        "billet.pending": "dim",
-        "billet.running": "bold cyan",
-        "billet.ok": "bold green",
-        "billet.failed": "bold red",
+        "billet.pending": "#3FD2BE",
+        "billet.running": "bold #C05CE0",
+        "billet.ok": "bold #22C55E",
+        "billet.failed": "bold #EF4444",
     }
 )
 
