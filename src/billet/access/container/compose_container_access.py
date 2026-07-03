@@ -3,8 +3,11 @@
 Implements ``ContainerAccess``. It reads each repo's ``.devcontainer/devcontainer.json``
 on the Host (a read-only data contract — see ADR-0002) into :class:`DevcontainerFacts`, and
 runs ``docker compose`` on the Host over SSH. It mirrors the ``remote_build_and_bootstrap``
-/ ``remote_compose_up`` phases of the lifted ``up.sh``, with the in-container bootstrap now
-sourced from the devcontainer's ``postCreateCommand`` rather than a bespoke config value.
+/ ``remote_compose_up`` phases of the lifted ``up.sh``, with the repo-owned in-container
+bootstrap sourced from the devcontainer's ``postCreateCommand`` rather than a bespoke config
+value. The operator's *personal* bootstrap is the one phase that does not go through
+``docker compose exec``: it hops through the container's loopback sshd with the agent
+forwarded, so it can use the operator's git identity (see ``run_personal_bootstrap``).
 
 Compose runs as plain ``docker compose`` (no ``sg docker`` wrapper): a fresh SSH session on
 a provisioned Host already has the ``docker`` group active, so the wrapper the cold path
@@ -124,10 +127,20 @@ class ComposeContainerAccess:
     def run_personal_bootstrap(
         self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts, command: str
     ) -> None:
-        """Run the operator's ``personal_bootstrap_cmd`` in the service container (if set)."""
+        """Run the operator's ``personal_bootstrap_cmd`` in the service container (if set).
+
+        Unlike the repo-owned ``postCreateCommand``, the personal bootstrap routinely needs
+        the operator's git identity (e.g. cloning a private dotfiles repo), and a
+        ``docker compose exec`` session inherits no agent socket. So this phase hops through
+        the container's loopback sshd (ADR-0003) with the agent forwarded end-to-end
+        (operator -> Host -> container) — like the clone, the key is never parked.
+        """
         if not command:
             return
-        self._run_script(remote, self._exec_script(spec, facts, command))
+        argv = ssh.ssh_argv(
+            remote.admin_user, remote.ip, "bash -se", batch_mode=True, forward_agent=True
+        )
+        self._runner.run(argv, input_text=self._personal_bootstrap_script(spec, facts, command))
 
     def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
         """Run the Workspace's ``verify_cmd`` in the service container."""
@@ -182,6 +195,33 @@ class ComposeContainerAccess:
             facts, "exec", "-T", shlex.quote(facts.service), "bash", "-lc", shlex.quote(command)
         )
         return _prelude(spec) + exec_cmd + "\n"
+
+    @staticmethod
+    def _personal_bootstrap_script(
+        spec: WorkspaceSpec, facts: DevcontainerFacts, command: str
+    ) -> str:
+        """Build the Host-side script: agent-forwarded ssh into the container's sshd.
+
+        ``-n`` keeps the inner ssh off the outer script's stdin. Host-key checking is
+        disabled for this hop only: the container regenerates host keys on rebuild and the
+        connection never leaves the VM's loopback. ``command`` is double-quoted because two
+        shells consume a layer each — the Host bash parsing this script, then the
+        container-side sshd shell evaluating the remote command — leaving the ``cd … &&``
+        line as the single ``bash -lc`` argument in the container.
+        """
+        inner = f"cd {shlex.quote(facts.workspace_folder)} && {command}"
+        hop = (
+            "exec ssh -n -A"
+            " -o BatchMode=yes"
+            " -o StrictHostKeyChecking=no"
+            " -o UserKnownHostsFile=/dev/null"
+            " -o LogLevel=ERROR"
+            " -o ConnectionAttempts=5"
+            f" -p {spec.container_ssh_port}"
+            f" {shlex.quote(facts.remote_user)}@127.0.0.1"
+            f" bash -lc {shlex.quote(shlex.quote(inner))}"
+        )
+        return "set -euo pipefail\n" + hop + "\n"
 
 
 def _prelude(spec: WorkspaceSpec) -> str:

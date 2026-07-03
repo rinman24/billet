@@ -127,11 +127,12 @@ def test_compose_up_exports_the_assigned_loopback_port() -> None:
 
 
 def test_every_compose_op_exports_the_port() -> None:
+    # The personal bootstrap is absent here: it hops through the container's sshd rather
+    # than driving compose, so it targets the port directly (asserted in its own tests).
     spec = make_workspace_spec(container_ssh_port=2299)
     access, runner = _access(lambda _argv: completed(stdout="abc\n"))
     access.compose_up(spec, REMOTE, FACTS)
     access.run_post_create(spec, REMOTE, FACTS)
-    access.run_personal_bootstrap(spec, REMOTE, FACTS, "bash ~/dotfiles/install.sh")
     access.verify(spec, REMOTE, FACTS)
     access.compose_stop(spec, REMOTE, FACTS)
     access.is_running(spec, REMOTE, FACTS)
@@ -154,28 +155,62 @@ def test_run_post_create_is_a_noop_when_absent() -> None:
     assert runner.calls == []
 
 
-def test_run_personal_bootstrap_execs_in_service_container() -> None:
+def test_run_personal_bootstrap_forwards_the_agent_to_the_host() -> None:
     access, runner = _access(lambda _argv: completed())
-    command = "git clone git@github.com:me/dotfiles.git ~/dotfiles && bash ~/dotfiles/install.sh"
+    access.run_personal_bootstrap(SPEC, REMOTE, FACTS, "bash ~/dotfiles/install.sh")
+    argv = runner.calls[-1]
+    # Outer hop to the Host: agent-forwarded, non-interactive, feeding a `bash -se` script.
+    assert "-A" in argv
+    assert "BatchMode=yes" in argv
+    # Trust-on-first-use stays on for the Host hop; only the loopback hop disables it.
+    assert "StrictHostKeyChecking=accept-new" in argv
+    assert argv[-2:] == ("azureuser@20.0.0.5", "bash -se")
+
+
+def test_run_personal_bootstrap_hops_to_the_container_sshd() -> None:
+    access, runner = _access(lambda _argv: completed())
+    spec = make_workspace_spec(container_ssh_port=2299)
+    access.run_personal_bootstrap(spec, REMOTE, FACTS, "bash ~/dotfiles/install.sh")
+    script = runner.inputs[-1]
+    assert script is not None
+    # Inner hop: agent-forwarded again, to the container's loopback sshd on the assigned
+    # port (ADR-0003) as the devcontainer's remoteUser.
+    assert "ssh -n -A" in script
+    assert "-p 2299" in script
+    assert "dev@127.0.0.1" in script
+
+
+def test_run_personal_bootstrap_double_quotes_the_command() -> None:
+    access, runner = _access(lambda _argv: completed())
+    command = "git clone git@github.com:me/dotfiles ~/dotfiles && bash ~/dotfiles/install.sh"
     access.run_personal_bootstrap(SPEC, REMOTE, FACTS, command)
     script = runner.inputs[-1]
     assert script is not None
-    assert (
-        "docker compose -f .devcontainer/docker-compose.yml "
-        f"exec -T gswa-backend bash -lc '{command}'"
-    ) in script
-    # Runs non-interactively over `bash -se` on the host, like the other phases.
-    assert runner.commands()[-1].endswith("bash -se")
+    # Two shells each consume one quoting layer (host bash parses the hop line, then the
+    # container-side sshd shell evaluates the remote command), leaving `cd <workspaceFolder>
+    # && <command>` as the single bash -lc argument in the container.
+    assert shlex.quote(shlex.quote(f"cd /app && {command}")) in script
 
 
-def test_run_personal_bootstrap_quotes_embedded_single_quotes() -> None:
+def test_run_personal_bootstrap_keeps_embedded_quotes_literal() -> None:
     access, runner = _access(lambda _argv: completed())
     command = "echo 'hi' && cd $HOME"
     access.run_personal_bootstrap(SPEC, REMOTE, FACTS, command)
     script = runner.inputs[-1]
     assert script is not None
-    # shlex's '"'"' escaping keeps the quotes and $HOME literal through the outer bash -lc.
-    assert shlex.quote(command) in script
+    # The double shlex.quote keeps quotes and $HOME literal through both shells.
+    assert shlex.quote(shlex.quote(f"cd /app && {command}")) in script
+
+
+def test_run_personal_bootstrap_disables_host_key_checks_for_the_loopback_hop() -> None:
+    access, runner = _access(lambda _argv: completed())
+    access.run_personal_bootstrap(SPEC, REMOTE, FACTS, "bash ~/dotfiles/install.sh")
+    script = runner.inputs[-1]
+    assert script is not None
+    # The container regenerates host keys on rebuild and the hop never leaves the VM's
+    # loopback, so host-key checking is disabled for this hop only.
+    assert "StrictHostKeyChecking=no" in script
+    assert "UserKnownHostsFile=/dev/null" in script
 
 
 def test_run_personal_bootstrap_is_a_noop_when_empty() -> None:
