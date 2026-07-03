@@ -5,7 +5,7 @@ A ready-made implementation of the CI declaration-check described in the README
 this test, run in required build validation + branch protection, makes a repo that
 drops the canon declaration un-mergeable. Offline and deterministic.
 
-Adopted from canon's ``templates/ci/test_canon_adoption.py`` (commit ``5cc14c1``)
+Adopted from canon's ``templates/ci/test_canon_adoption.py`` (tag ``v1.1.0``)
 with the knobs below set for billet:
   * MARKETPLACE_REPO  — the GitHub repo backing the canon marketplace
   * REQUIRED_MODULES  — the modules THIS repo requires in .claude/canon.txt

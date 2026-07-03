@@ -4,7 +4,7 @@
       "source": {
         "source": "github",
         "repo": "rinman24/canon",
-        "ref": "v1.0.0"
+        "ref": "v1.1.0"
       },
       "autoUpdate": false
     }
