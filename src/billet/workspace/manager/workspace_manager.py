@@ -100,7 +100,8 @@ class WorkspaceManager:
             steps.append(
                 WorkspacePlanStep(
                     WorkspaceStepKind.PERSONAL_BOOTSTRAP,
-                    f"run personal bootstrap ({personal_bootstrap_cmd}) in the service container",
+                    f"run personal bootstrap ({personal_bootstrap_cmd}) "
+                    "in the service container (agent-forwarded)",
                 )
             )
         if verify:

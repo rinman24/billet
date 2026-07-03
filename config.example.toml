@@ -23,9 +23,13 @@ subscription_id = "00000000-0000-0000-0000-000000000000"
 # more than one host is defined, --host is required.
 default_host = "devbox"
 # Optional. Your personal in-container bootstrap, run in every Workspace's service
-# container right after the devcontainer's postCreateCommand at `billet start` time
-# (e.g. clone + install your dotfiles). Empty (the default) disables it.
-# personal_bootstrap_cmd = "git clone https://github.com/me/dotfiles ~/dotfiles && bash ~/dotfiles/install.sh"
+# container right after the devcontainer's postCreateCommand at `billet start` time.
+# It runs through the container's sshd with your ssh agent forwarded (operator -> Host ->
+# container), so cloning private repos over ssh URLs just works — no key is ever parked
+# on the Host or in the container. Note: an sshd login shell does not inherit the
+# service's compose-provided environment (`environment:` / `env_file:`); don't rely on
+# those variables here. Empty (the default) disables it.
+# personal_bootstrap_cmd = "git clone git@github.com:me/dotfiles ~/dotfiles && bash ~/dotfiles/install.sh"
 
 # ---------------------------------------------------------------------------------
 # [hosts.<key>] — one table per cloud Host (a VM). The table key (here "devbox") is

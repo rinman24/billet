@@ -152,7 +152,7 @@ class ContainerAccess(Protocol):
     def run_personal_bootstrap(
         self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts, command: str
     ) -> None:
-        """Run the operator's ``personal_bootstrap_cmd`` inside the service container."""
+        """Run the ``personal_bootstrap_cmd`` in the container, agent-forwarded via its sshd."""
         ...
 
     def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
