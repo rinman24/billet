@@ -102,6 +102,10 @@ Host (`ProxyJump`), each with its own port and a collision-free `HostKeyAlias`, 
 still needs a single NSG rule. See
 [ADR-0003](https://rinman24.github.io/billet/adr/adr-0003-workspace-port-binding-contract/).
 
+Onboarding a new repo is a checklist plus copyable template files: see
+[Adopting a repo as a Workspace](https://rinman24.github.io/billet/adopting-a-repo/) and
+[`templates/workspace/`](templates/workspace/).
+
 ### A Host without Workspaces (the fleet-host)
 
 Some Hosts are managed by billet purely for their VM lifecycle and carry no Workspaces — for

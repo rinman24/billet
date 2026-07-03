@@ -1,0 +1,28 @@
+# Merge into the repo's dev-container Dockerfile — this is NOT a standalone Dockerfile.
+# It assumes a Debian/Ubuntu base and shows only the sshd-related additions a billet
+# Workspace needs on top of whatever toolchain the repo already installs. Replace
+# <repo> with the repository name.
+
+# --- 1. Add openssh-server (and sudo, if not already present) to the apt install ------
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        openssh-server \
+        sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- 2. Non-root `dev` user (uid/gid 1000) with passwordless sudo ---------------------
+# Required by the entrypoint (it launches the system sshd via sudo) and by billet's
+# connect path (sshd.conf allows only `dev`). uid 1000 aligns with the VM admin user so
+# the repo bind mount needs no chown. Pre-create ~/.ssh 0700 dev-owned so the runtime
+# authorized_keys bind mount lands StrictModes-clean instead of in a root-owned dir.
+RUN groupadd -g 1000 dev \
+    && useradd -u 1000 -g 1000 -m -s /bin/bash dev \
+    && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \
+    && chmod 0440 /etc/sudoers.d/dev \
+    && install -d -o dev -g dev -m 0700 /home/dev/.ssh
+
+# --- 3. Bake the sshd hardening drop-in (as root, before any USER directive) ----------
+COPY .devcontainer/sshd.conf /etc/ssh/sshd_config.d/<repo>.conf
+
+# --- 4. Drop to the non-root user as the FINAL directive -------------------------------
+USER dev
