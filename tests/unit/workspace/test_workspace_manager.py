@@ -104,7 +104,9 @@ def test_connect_target_builds_tty_tmux_argv_through_the_container_alias() -> No
     assert argv[0] == "ssh"
     assert "-t" in argv
     assert "gswa-container" in argv  # via the alias (no user@host)
-    assert argv[-1] == "cd /app && exec tmux new-session -A -s main bash -l"
+    assert argv[-1] == (
+        "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 tmux new-session -A -s main bash -l"
+    )
 
 
 # --- status ------------------------------------------------------------------------
