@@ -38,7 +38,7 @@ and the host↔workspace mapping are derived live from Azure and resource tags.
 ## Status
 
 Both subsystems ship in Python. The **Host** subsystem drives the VM behind the
-`HostProvider` seam (`billet host up|stop|pin-ip`), with a dry-run plan and a confirm gate on
+`HostProvider` seam (`billet host up|stop|pin-ip|specs`), with a dry-run plan and a confirm gate on
 billable cold-create. The **Workspace** subsystem clones, builds, bootstraps, and connects a
 repo's devcontainer on a Host (`billet add|ls|start|stop|connect|ssh-config|rm`), reading each
 repo's `.devcontainer/devcontainer.json` as a read-only data contract. The Python tool now
@@ -84,6 +84,7 @@ mkdir -p ~/.config/billet && cp config.example.toml ~/.config/billet/config.toml
 billet host up --dry-run   # show the plan (cold-create / resume, auto-detected)
 billet host up             # create or resume the VM (cold-create asks to confirm)
 billet host pin-ip         # re-pin inbound SSH to your current egress IP/32
+billet host specs          # live CPU / memory / disk / container usage on the host
 billet host stop           # deallocate the VM (stops compute billing)
 ```
 

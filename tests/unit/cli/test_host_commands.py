@@ -11,8 +11,8 @@ from typer.testing import CliRunner
 
 from billet.cli import host_commands
 from billet.cli.app import app
-from billet.contracts import HostPowerState, HostProvider, HostStatus
-from tests.unit._fakes import FakeHostProvider
+from billet.contracts import HostPowerState, HostProvider, HostStatus, MetricsAccess
+from tests.unit._fakes import FakeHostProvider, FakeMetricsAccess
 
 runner = CliRunner()
 
@@ -119,6 +119,40 @@ def test_pin_ip_applies_the_pin(monkeypatch: pytest.MonkeyPatch, config_file: Pa
     result = runner.invoke(app, ["host", "pin-ip", "--config", str(config_file)])
     assert result.exit_code == 0
     assert "pin_inbound" in provider.calls
+
+
+def _install_metrics(monkeypatch: pytest.MonkeyPatch, metrics_access: FakeMetricsAccess) -> None:
+    def factory() -> MetricsAccess:
+        return metrics_access
+
+    monkeypatch.setattr(host_commands, "metrics_factory", factory)
+
+
+def test_specs_renders_the_usage_report(monkeypatch: pytest.MonkeyPatch, config_file: Path) -> None:
+    provider = FakeHostProvider(HostStatus(HostPowerState.RUNNING, "1.2.3.4", "VM running"))
+    metrics_access = FakeMetricsAccess()
+    _install(monkeypatch, provider)
+    _install_metrics(monkeypatch, metrics_access)
+    result = runner.invoke(app, ["host", "specs", "--config", str(config_file)])
+    assert result.exit_code == 0
+    assert "host 'devbox'" in result.output
+    assert "4 cores" in result.output
+    assert "4.0 GiB used of 16.0 GiB" in result.output
+    assert "gswa-backend" in result.output
+    assert [r.ip for r in metrics_access.remotes] == ["1.2.3.4"]
+
+
+def test_specs_on_a_deallocated_host_exits_cleanly(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    provider = FakeHostProvider(HostStatus(HostPowerState.DEALLOCATED, None, "VM deallocated"))
+    metrics_access = FakeMetricsAccess()
+    _install(monkeypatch, provider)
+    _install_metrics(monkeypatch, metrics_access)
+    result = runner.invoke(app, ["host", "specs", "--config", str(config_file)])
+    assert result.exit_code == 1
+    assert "not running" in result.output
+    assert metrics_access.remotes == []
 
 
 def test_missing_config_exits_cleanly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

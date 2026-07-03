@@ -6,6 +6,14 @@ See ADR-0001 for why the contracts live here rather than beside their subsystems
 
 from billet.contracts.config import GlobalConfig
 from billet.contracts.host import HostPowerState, HostProvider, HostSpec, HostStatus
+from billet.contracts.metrics import (
+    ContainerMetrics,
+    CpuMetrics,
+    DiskMetrics,
+    HostMetrics,
+    MemoryMetrics,
+    MetricsAccess,
+)
 from billet.contracts.plan import Plan, PlanStep, StepKind
 from billet.contracts.workspace import (
     ContainerAccess,
@@ -23,12 +31,18 @@ from billet.contracts.workspace import (
 
 __all__ = [
     "ContainerAccess",
+    "ContainerMetrics",
+    "CpuMetrics",
     "DevcontainerFacts",
+    "DiskMetrics",
     "GlobalConfig",
+    "HostMetrics",
     "HostPowerState",
     "HostProvider",
     "HostSpec",
     "HostStatus",
+    "MemoryMetrics",
+    "MetricsAccess",
     "Plan",
     "PlanStep",
     "RemoteHost",
