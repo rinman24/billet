@@ -116,6 +116,40 @@ def test_parses_workspace_with_defaults(tmp_path: Path) -> None:
     assert ws.verify_cmd == "make test"
 
 
+def test_workspace_status_color_defaults_to_none(tmp_path: Path) -> None:
+    ws = RegistryAccess(_write(tmp_path, _FULL_CONFIG)).workspace("gswa-backend")
+    assert ws.status_color is None
+
+
+def test_workspace_parses_valid_status_color(tmp_path: Path) -> None:
+    text = _FULL_CONFIG + 'status_color = "#C05CE0"\n'
+    ws = RegistryAccess(_write(tmp_path, text)).workspace("gswa-backend")
+    assert ws.status_color == "#C05CE0"
+
+
+def test_workspace_invalid_status_color_raises(tmp_path: Path) -> None:
+    text = _FULL_CONFIG + 'status_color = "blue"\n'
+    reg = RegistryAccess(_write(tmp_path, text))
+    with pytest.raises(ConfigError, match="hex color"):
+        reg.workspace("gswa-backend")
+
+
+def test_workspace_non_string_status_color_raises(tmp_path: Path) -> None:
+    text = _FULL_CONFIG + "status_color = 123\n"
+    reg = RegistryAccess(_write(tmp_path, text))
+    with pytest.raises(ConfigError, match="hex color"):
+        reg.workspace("gswa-backend")
+
+
+def test_workspace_rejects_hex_of_wrong_digit_count(tmp_path: Path) -> None:
+    # fullmatch pins the length: only exactly 3 or 6 hex digits are a brand color.
+    for bad in ("#1234", "#12345", "#1234567"):
+        text = _FULL_CONFIG + f'status_color = "{bad}"\n'
+        reg = RegistryAccess(_write(tmp_path, text))
+        with pytest.raises(ConfigError, match="hex color"):
+            reg.workspace("gswa-backend")
+
+
 def test_missing_file_raises(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="not found"):
         RegistryAccess(tmp_path / "nope.toml")

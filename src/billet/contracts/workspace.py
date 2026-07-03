@@ -20,6 +20,11 @@ class WorkspaceSpec:
 
     Only billet-owned intent lives here. Anything that is a property of the repo's
     container definition is read from ``devcontainer.json`` into :class:`DevcontainerFacts`.
+
+    ``status_color`` is likewise operator intent — the optional hex brand color billet
+    paints the Workspace's tmux status bar with on ``connect`` (its *status branding*), so an
+    operator can tell otherwise-identical container shells apart. It belongs here, not in
+    :class:`DevcontainerFacts`: the repo's container knows nothing about how billet brands it.
     """
 
     key: str
@@ -33,6 +38,7 @@ class WorkspaceSpec:
     agent_teams_flag: str
     host_bootstrap_cmd: str
     verify_cmd: str
+    status_color: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
