@@ -170,6 +170,7 @@ class FakeContainerAccess:
         self._facts = facts or _DEFAULT_FACTS
         self._running = running
         self.calls: list[str] = []
+        self.personal_bootstrap_cmds: list[str] = []
 
     def read_facts(self, spec: WorkspaceSpec, remote: RemoteHost) -> DevcontainerFacts:
         self.calls.append("read_facts")
@@ -182,6 +183,12 @@ class FakeContainerAccess:
         self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts
     ) -> None:
         self.calls.append("run_post_create")
+
+    def run_personal_bootstrap(
+        self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts, command: str
+    ) -> None:
+        self.calls.append("run_personal_bootstrap")
+        self.personal_bootstrap_cmds.append(command)
 
     def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
         self.calls.append("verify")

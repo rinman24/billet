@@ -168,6 +168,22 @@ def test_start_with_verify_runs_verify(monkeypatch: pytest.MonkeyPatch, config_f
     assert "verify" in cont.calls
 
 
+def test_start_runs_personal_bootstrap_from_global_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    text = _CONFIG.replace(
+        'default_host = "devbox"',
+        'default_host = "devbox"\npersonal_bootstrap_cmd = "bash ~/dotfiles/install.sh"',
+    )
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    _, _, cont, _ = _install(monkeypatch)
+    result = runner.invoke(app, ["start", "gswa-backend", "--config", str(path)])
+    assert result.exit_code == 0
+    assert cont.calls == ["read_facts", "compose_up", "run_post_create", "run_personal_bootstrap"]
+    assert cont.personal_bootstrap_cmds == ["bash ~/dotfiles/install.sh"]
+
+
 # --- stop --------------------------------------------------------------------------
 
 

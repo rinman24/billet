@@ -76,7 +76,9 @@ class WorkspaceManager:
 
     # --- start ---------------------------------------------------------------------
 
-    def plan_start(self, spec: WorkspaceSpec, *, verify: bool) -> WorkspacePlan:
+    def plan_start(
+        self, spec: WorkspaceSpec, *, verify: bool, personal_bootstrap_cmd: str = ""
+    ) -> WorkspacePlan:
         """Build the (idempotent) plan to clone, build, bootstrap, and optionally verify."""
         steps = [
             WorkspacePlanStep(
@@ -92,6 +94,13 @@ class WorkspaceManager:
                 "run the devcontainer postCreateCommand in the service container",
             ),
         ]
+        if personal_bootstrap_cmd:
+            steps.append(
+                WorkspacePlanStep(
+                    WorkspaceStepKind.PERSONAL_BOOTSTRAP,
+                    f"run personal bootstrap ({personal_bootstrap_cmd}) in the service container",
+                )
+            )
         if verify:
             steps.append(
                 WorkspacePlanStep(
@@ -102,9 +111,18 @@ class WorkspaceManager:
         return WorkspacePlan(workspace_key=spec.key, steps=tuple(steps))
 
     def apply_start(
-        self, plan: WorkspacePlan, spec: WorkspaceSpec, remote: RemoteHost
+        self,
+        plan: WorkspacePlan,
+        spec: WorkspaceSpec,
+        remote: RemoteHost,
+        *,
+        personal_bootstrap_cmd: str,
     ) -> DevcontainerFacts:
-        """Execute a start plan; return the facts read from the repo's devcontainer.json."""
+        """Execute a start plan; return the facts read from the repo's devcontainer.json.
+
+        ``personal_bootstrap_cmd`` is required so plan/apply coupling stays explicit: pass
+        the same value the plan was built with (empty disables the phase in both places).
+        """
         kinds = {step.kind for step in plan.steps}
         if WorkspaceStepKind.ENSURE_SOURCE in kinds:
             self._source.ensure_clone(spec, remote)
@@ -113,6 +131,8 @@ class WorkspaceManager:
             self._container.compose_up(spec, remote, facts)
         if WorkspaceStepKind.POST_CREATE in kinds:
             self._container.run_post_create(spec, remote, facts)
+        if WorkspaceStepKind.PERSONAL_BOOTSTRAP in kinds:
+            self._container.run_personal_bootstrap(spec, remote, facts, personal_bootstrap_cmd)
         if WorkspaceStepKind.VERIFY in kinds:
             self._container.verify(spec, remote, facts)
         return facts

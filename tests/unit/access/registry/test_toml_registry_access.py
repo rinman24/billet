@@ -59,6 +59,29 @@ def test_parses_global_config(tmp_path: Path) -> None:
     assert gc.default_host == "devbox"
 
 
+def test_parses_explicit_personal_bootstrap_cmd(tmp_path: Path) -> None:
+    text = _FULL_CONFIG.replace(
+        'default_host = "devbox"',
+        'default_host = "devbox"\npersonal_bootstrap_cmd = "bash ~/dotfiles/install.sh"',
+    )
+    gc = RegistryAccess(_write(tmp_path, text)).global_config()
+    assert gc.personal_bootstrap_cmd == "bash ~/dotfiles/install.sh"
+
+
+def test_personal_bootstrap_cmd_defaults_to_empty_when_absent(tmp_path: Path) -> None:
+    gc = RegistryAccess(_write(tmp_path, _FULL_CONFIG)).global_config()
+    assert gc.personal_bootstrap_cmd == ""
+
+
+def test_non_string_personal_bootstrap_cmd_rejected(tmp_path: Path) -> None:
+    text = _FULL_CONFIG.replace(
+        'default_host = "devbox"', 'default_host = "devbox"\npersonal_bootstrap_cmd = 7'
+    )
+    reg = RegistryAccess(_write(tmp_path, text))
+    with pytest.raises(ConfigError, match="'personal_bootstrap_cmd' must be a string"):
+        reg.global_config()
+
+
 def test_parses_host_with_derived_nsg_and_defaults(tmp_path: Path) -> None:
     host = RegistryAccess(_write(tmp_path, _FULL_CONFIG)).host("devbox")
     assert host.vm_name == "gswa-devbox"
