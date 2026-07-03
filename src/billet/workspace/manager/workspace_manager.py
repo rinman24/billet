@@ -32,6 +32,7 @@ from billet.shared.errors import BilletError
 from billet.workspace.engine.placement import HostPlacementPolicy
 from billet.workspace.engine.port_allocator import PortAllocator
 from billet.workspace.engine.ssh_config_engine import SshConfigEngine
+from billet.workspace.engine.tmux_status_engine import TmuxStatusEngine
 
 
 class WorkspaceManager:
@@ -49,6 +50,7 @@ class WorkspaceManager:
         self._allocator = PortAllocator()
         self._placement = HostPlacementPolicy()
         self._engine = SshConfigEngine()
+        self._tmux_status = TmuxStatusEngine()
 
     # --- placement (command-verb precondition, ADR-0004) ---------------------------
 
@@ -176,11 +178,21 @@ class WorkspaceManager:
         starts non-UTF-8 and renders every non-ASCII cell as ``_``. ``C.UTF-8`` is built
         into glibc, needs no locale-gen, and overrides any forwarded ``LC_*`` via
         ``LC_ALL``, so tmux and everything inside it always run UTF-8.
+
+        The session's status bar is *branded* via a ``set -g`` prelude
+        (:class:`TmuxStatusEngine`): the Workspace key is always shown on the left, and the
+        optional ``status_color`` tints the bar so an operator can tell otherwise-identical
+        container shells apart. The prelude runs on the same ``tmux`` invocation *ahead* of
+        ``new-session`` because ``status-*`` are session globals and the attaching
+        ``new-session -A`` short-circuits to an attach (never re-applying trailing options)
+        when the session already exists — so branding must precede it to cover both the
+        create and the re-attach path.
         """
+        prelude = self._tmux_status.render_prelude(label=spec.key, color=spec.status_color)
         remote_command = (
             f"cd {shlex.quote(facts.workspace_folder)} && "
             "exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 "
-            f"tmux new-session -A -s {shlex.quote(spec.tmux_session)} bash -l"
+            f"tmux {prelude}new-session -A -s {shlex.quote(spec.tmux_session)} bash -l"
         )
         # user=None: the container alias in ssh-config already supplies user/host/port.
         return ssh.ssh_argv(None, spec.container_alias, remote_command, tty=True)
@@ -243,4 +255,6 @@ def _render_block(spec: WorkspaceSpec) -> str:
         value: str = getattr(spec, field)
         lines.append(f'{field} = "{value}"')
     lines.append(f"container_ssh_port = {spec.container_ssh_port}")
+    if spec.status_color is not None:
+        lines.append(f'status_color = "{spec.status_color}"')
     return "\n".join(lines) + "\n"

@@ -51,6 +51,7 @@ _DEFAULT_WORKSPACE_SPEC = WorkspaceSpec(
     agent_teams_flag="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
     host_bootstrap_cmd=":",
     verify_cmd="make test",
+    status_color=None,
 )
 
 _DEFAULT_FACTS = DevcontainerFacts(

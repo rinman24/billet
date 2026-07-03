@@ -6,6 +6,7 @@ into :class:`GlobalConfig` / :class:`HostSpec` / :class:`WorkspaceSpec`, raising
 """
 
 from pathlib import Path
+import re
 import tomllib
 from typing import Any, cast
 
@@ -17,6 +18,7 @@ _DEFAULT_DOCKER_GPG_URL = "https://download.docker.com/linux/ubuntu/gpg"
 _DEFAULT_DOCKER_APT_URL = "https://download.docker.com/linux/ubuntu"
 _DEFAULT_SSH_RULE_NAME = "default-allow-ssh"
 _DEFAULT_CONTAINER_SSH_PORT = 2222
+_HEX_COLOR_RE = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})")
 
 
 class RegistryAccess:
@@ -83,6 +85,14 @@ class RegistryAccess:
         value = table[key]
         if not isinstance(value, bool):
             raise ConfigError(f"{ctx}: key '{key}' must be a boolean")
+        return value
+
+    def _status_color(self, table: dict[str, Any], ctx: str) -> str | None:
+        if "status_color" not in table:
+            return None
+        value = table["status_color"]
+        if not isinstance(value, str) or _HEX_COLOR_RE.fullmatch(value) is None:
+            raise ConfigError(f"{ctx}: key 'status_color' must be a hex color like \"#C05CE0\"")
         return value
 
     # --- public API ----------------------------------------------------------------
@@ -156,6 +166,7 @@ class RegistryAccess:
             agent_teams_flag=self._str(table, "agent_teams_flag", ctx, default=""),
             host_bootstrap_cmd=self._str(table, "host_bootstrap_cmd", ctx, default=":"),
             verify_cmd=self._str(table, "verify_cmd", ctx, default="make test"),
+            status_color=self._status_color(table, ctx),
         )
 
     def resolve_host_key(self, requested: str | None) -> str:

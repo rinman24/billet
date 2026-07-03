@@ -111,6 +111,10 @@ agent_teams_flag   = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 host_bootstrap_cmd = ":"
 # What `billet start --verify` runs inside the container after a cold bootstrap.
 verify_cmd         = "make test"
+# Optional. Hex brand color ("#RGB" or "#RRGGBB") for this Workspace's tmux status bar on
+# `billet connect`, so you can tell containers apart at a glance. billet auto-picks a legible
+# text color and always shows the workspace key on the bar. Omit to keep tmux's default.
+status_color       = "#C05CE0"
 
 # ---------------------------------------------------------------------------------
 # A SECOND Workspace on the SAME Host — the multi-repo case (slice 6).
@@ -138,3 +142,4 @@ verify_cmd         = "make test"
 # container_alias    = "other-container"                         # distinct container alias
 # host_bootstrap_cmd = ":"
 # verify_cmd         = "make test"
+# status_color       = "#5C9CE0"                                 # optional; a distinct hue tells it apart
