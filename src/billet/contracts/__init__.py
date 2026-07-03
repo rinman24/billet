@@ -14,7 +14,7 @@ from billet.contracts.metrics import (
     MemoryMetrics,
     MetricsAccess,
 )
-from billet.contracts.plan import Plan, PlanStep, StepKind
+from billet.contracts.plan import NullPlanObserver, Plan, PlanObserver, PlanStep, StepKind
 from billet.contracts.workspace import (
     ContainerAccess,
     DevcontainerFacts,
@@ -43,7 +43,9 @@ __all__ = [
     "HostStatus",
     "MemoryMetrics",
     "MetricsAccess",
+    "NullPlanObserver",
     "Plan",
+    "PlanObserver",
     "PlanStep",
     "RemoteHost",
     "SourceAccess",

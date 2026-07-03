@@ -14,7 +14,9 @@ from billet.contracts import (
     HostSpec,
     HostStatus,
     MemoryMetrics,
+    PlanStep,
     RemoteHost,
+    WorkspacePlanStep,
     WorkspaceSpec,
 )
 from billet.infrastructure.process import CompletedProcess
@@ -157,6 +159,22 @@ class FakeHostProvider:
 
     def ensure_tags(self, spec: HostSpec) -> None:
         self.calls.append("ensure_tags")
+
+
+class RecordingPlanObserver:
+    """A PlanObserver that records each ``(event, step)`` it receives, in order."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, PlanStep | WorkspacePlanStep]] = []
+
+    def step_started(self, step: PlanStep | WorkspacePlanStep) -> None:
+        self.events.append(("started", step))
+
+    def step_succeeded(self, step: PlanStep | WorkspacePlanStep) -> None:
+        self.events.append(("succeeded", step))
+
+    def step_failed(self, step: PlanStep | WorkspacePlanStep) -> None:
+        self.events.append(("failed", step))
 
 
 _DEFAULT_HOST_METRICS = HostMetrics(

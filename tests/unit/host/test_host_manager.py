@@ -2,10 +2,15 @@
 
 import pytest
 
-from billet.contracts import HostPowerState, HostStatus, StepKind
+from billet.contracts import HostPowerState, HostSpec, HostStatus, StepKind
 from billet.host.manager.host_manager import HostManager
 from billet.shared.errors import HostOperationError
-from tests.unit._fakes import FakeHostProvider, FakeMetricsAccess, make_host_spec
+from tests.unit._fakes import (
+    FakeHostProvider,
+    FakeMetricsAccess,
+    RecordingPlanObserver,
+    make_host_spec,
+)
 
 SPEC = make_host_spec()
 
@@ -127,3 +132,39 @@ def test_apply_resume_dispatches_adoption_first() -> None:
     provider.calls.clear()
     manager.apply(plan, SPEC)
     assert provider.calls == ["ensure_tags", "pin_inbound", "start", "wait_until_reachable"]
+
+
+def test_apply_emits_started_then_succeeded_for_every_step_in_order() -> None:
+    provider = FakeHostProvider(_status(HostPowerState.DEALLOCATED))
+    manager = HostManager(provider)
+    plan = manager.plan_up(SPEC)
+    observer = RecordingPlanObserver()
+    manager.apply(plan, SPEC, observer)
+    expected: list[tuple[str, object]] = []
+    for step in plan.steps:
+        expected += [("started", step), ("succeeded", step)]
+    assert observer.events == expected
+
+
+def test_apply_emits_failed_reraises_and_runs_no_later_steps() -> None:
+    class ExplodingProvider(FakeHostProvider):
+        def start(self, spec: HostSpec) -> None:
+            super().start(spec)
+            raise HostOperationError("boom")
+
+    provider = ExplodingProvider(_status(HostPowerState.DEALLOCATED))
+    manager = HostManager(provider)
+    plan = manager.plan_up(SPEC)  # ensure_tags, pin_inbound, start, wait_reachable
+    provider.calls.clear()
+    observer = RecordingPlanObserver()
+    with pytest.raises(HostOperationError, match="boom"):
+        manager.apply(plan, SPEC, observer)
+    assert observer.events == [
+        ("started", plan.steps[0]),
+        ("succeeded", plan.steps[0]),
+        ("started", plan.steps[1]),
+        ("succeeded", plan.steps[1]),
+        ("started", plan.steps[2]),
+        ("failed", plan.steps[2]),
+    ]
+    assert provider.calls == ["ensure_tags", "pin_inbound", "start"]
