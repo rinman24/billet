@@ -8,7 +8,8 @@ different cadence and comes from the data plane, not the backend API.
 
 Host-level numbers are normalized to bytes so the client can render and compare them.
 Container-level usage is kept as the verbatim ``docker stats`` strings (``0.15%``,
-``1.2GiB / 15.6GiB``): billet reports them, it does not compute on them.
+``1.2GiB / 15.6GiB``): billet stores them untouched, and the client parses them only
+for display (usage bars, per-host CPU share).
 """
 
 from dataclasses import dataclass

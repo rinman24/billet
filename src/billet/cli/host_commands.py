@@ -9,12 +9,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
+from rich import box
+from rich.console import Console
+from rich.padding import Padding
+from rich.table import Table
+from rich.text import Text
 import typer
 
 from billet.access.host.azure_vm_provider import AzureVmHostProvider
 from billet.access.metrics.ssh_metrics_access import SshMetricsAccess
 from billet.access.registry.toml_registry_access import RegistryAccess
-from billet.cli import _console, _planio
+from billet.cli import _planio
+from billet.cli._console import planning_status
 from billet.contracts import HostMetrics, HostProvider, HostSpec, HostStatus, MetricsAccess
 from billet.host.manager.host_manager import HostManager
 from billet.infrastructure.process import SubprocessRunner
@@ -71,7 +77,7 @@ def up(
 ) -> None:
     """Bring a Host up (cold provision or resume, auto-detected)."""
     try:
-        with _console.planning_status():
+        with planning_status():
             manager, spec, key = _build(config, host)
             plan = manager.plan_up(spec)
         if _planio.run_plan(
@@ -91,7 +97,7 @@ def stop(
 ) -> None:
     """Deallocate a Host (stops compute billing; the OS disk persists)."""
     try:
-        with _console.planning_status():
+        with planning_status():
             manager, spec, key = _build(config, host)
             plan = manager.plan_stop(spec)
         if _planio.run_plan(
@@ -116,8 +122,36 @@ def specs(
         _planio.fail(exc)
 
 
+_console = Console(highlight=False)
+
+_BAR_WIDTH = 10
+_BAR_HOT_PERCENT = 85.0
+_CPU_FILL = "#C05CE0"
+_MEM_FILL = "#C05CE0"
+
+
 def _gib(size_bytes: int) -> str:
     return f"{size_bytes / 2**30:.1f} GiB"
+
+
+def _parse_percent(raw: str) -> float | None:
+    """Parse a ``docker stats`` percentage like ``'7.7%'`` (None when unparseable)."""
+    try:
+        return float(raw.strip().removesuffix("%"))
+    except ValueError:
+        return None
+
+
+def _usage_cell(percent: float | None, fill: str, fallback: str = "?") -> Text:
+    """Render a fixed-width usage bar with its label, e.g. ``██░░░░░░░░  25.0%``."""
+    if percent is None:
+        return Text(f"{'':{_BAR_WIDTH}} {fallback:>6}")
+    clamped: float = min(max(percent, 0.0), 100.0)
+    filled: int = round(_BAR_WIDTH * clamped / 100.0)
+    cell = Text("█" * filled, style="red" if clamped >= _BAR_HOT_PERCENT else fill)
+    cell.append("░" * (_BAR_WIDTH - filled), style="dim")
+    cell.append(f" {percent:5.1f}%")
+    return cell
 
 
 def _render_specs(key: str, spec: HostSpec, status: HostStatus, metrics: HostMetrics) -> None:
@@ -131,24 +165,55 @@ def _render_specs(key: str, spec: HostSpec, status: HostStatus, metrics: HostMet
         f"load {cpu.load_1m:.2f} / {cpu.load_5m:.2f} / {cpu.load_15m:.2f} (1/5/15 min)"
     )
     mem = metrics.memory
-    typer.echo(
-        f"  mem:  {_gib(mem.used_bytes)} used of {_gib(mem.total_bytes)} "
-        f"({_gib(mem.available_bytes)} available, {mem.used_percent:.0f}% used)"
+    mem_line = Text("  mem:  ")
+    mem_line.append_text(_usage_cell(mem.used_percent, _MEM_FILL))
+    mem_line.append(
+        f"  {_gib(mem.used_bytes)} used of {_gib(mem.total_bytes)} "
+        f"({_gib(mem.available_bytes)} available)"
     )
+    _console.print(mem_line)
     for disk in metrics.disks:
-        typer.echo(
-            f"  disk: {disk.mount} — {_gib(disk.used_bytes)} used of {_gib(disk.size_bytes)} "
-            f"({_gib(disk.available_bytes)} free, {disk.used_percent:.0f}% used)"
+        disk_line = Text("  disk: ")
+        disk_line.append_text(_usage_cell(disk.used_percent, _MEM_FILL))
+        disk_line.append(
+            f"  {disk.mount} — {_gib(disk.used_bytes)} used of {_gib(disk.size_bytes)} "
+            f"({_gib(disk.available_bytes)} free)"
         )
+        _console.print(disk_line)
     if not metrics.containers:
         typer.echo("  containers: none running")
         return
-    typer.echo(f"  containers ({len(metrics.containers)} running):")
+    typer.echo(
+        f"  containers ({len(metrics.containers)} running) — "
+        f"bars show share of the whole host ({cpu.cores} cores):"
+    )
+    _console.print(Padding(_containers_table(metrics), (0, 0, 0, 2)))
+
+
+def _containers_table(metrics: HostMetrics) -> Table:
+    table = Table(box=box.SIMPLE_HEAD, show_edge=False, pad_edge=False, padding=(0, 2, 0, 0))
+    cell_width: int = _BAR_WIDTH + 7  # bar + space + "nnn.n%"
+    table.add_column("name", no_wrap=True)
+    table.add_column("cpu", no_wrap=True, min_width=cell_width)
+    table.add_column("mem", no_wrap=True, min_width=cell_width)
+    table.add_column("mem used", no_wrap=True)
+    table.add_column("status", no_wrap=True)
+    cores: int = metrics.cpu.cores
     for container in metrics.containers:
-        typer.echo(
-            f"    {container.name:<24} cpu {container.cpu_percent:>8}  "
-            f"mem {container.mem_usage} ({container.mem_percent})  [{container.status}]"
+        raw_cpu: float | None = _parse_percent(container.cpu_percent)
+        # `docker stats` CPU% is per-core; divide by the core count for the host share.
+        host_cpu: float | None = raw_cpu / cores if raw_cpu is not None and cores else None
+        table.add_row(
+            container.name,
+            _usage_cell(host_cpu, _CPU_FILL, fallback=container.cpu_percent),
+            _usage_cell(
+                _parse_percent(container.mem_percent), _MEM_FILL, fallback=container.mem_percent
+            ),
+            # mem_usage is "1.2GiB / 15.6GiB"; the host total already heads the report.
+            container.mem_usage.split(" / ")[0],
+            container.status,
         )
+    return table
 
 
 @app.command(name="pin-ip")
@@ -159,7 +224,7 @@ def pin_ip(
 ) -> None:
     """Re-pin the inbound SSH rule to your current egress IP/32 (no state change)."""
     try:
-        with _console.planning_status():
+        with planning_status():
             manager, spec, key = _build(config, host)
             plan = manager.plan_pin_ip(spec)
         if _planio.run_plan(

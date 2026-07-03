@@ -11,9 +11,16 @@ from typer.testing import CliRunner
 
 from billet.cli import host_commands
 from billet.cli.app import app
-from billet.contracts import HostPowerState, HostProvider, HostSpec, HostStatus, MetricsAccess
+from billet.contracts import (
+    ContainerMetrics,
+    HostPowerState,
+    HostProvider,
+    HostSpec,
+    HostStatus,
+    MetricsAccess,
+)
 from billet.shared.errors import HostOperationError
-from tests.unit._fakes import FakeHostProvider, FakeMetricsAccess
+from tests.unit._fakes import FakeHostProvider, FakeMetricsAccess, make_host_metrics
 
 runner = CliRunner()
 
@@ -160,6 +167,51 @@ def test_specs_renders_the_usage_report(monkeypatch: pytest.MonkeyPatch, config_
     assert "4.0 GiB used of 16.0 GiB" in result.output
     assert "gswa-backend" in result.output
     assert [r.ip for r in metrics_access.remotes] == ["1.2.3.4"]
+
+
+def test_specs_renders_usage_bars_normalized_to_the_host(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    provider = FakeHostProvider(HostStatus(HostPowerState.RUNNING, "1.2.3.4", "VM running"))
+    container = ContainerMetrics(
+        name="devcontainer-billet-1",
+        status="Up 52 minutes",
+        cpu_percent="50.00%",
+        mem_usage="427.2MiB / 15.57GiB",
+        mem_percent="2.68%",
+    )
+    metrics_access = FakeMetricsAccess(make_host_metrics(containers=(container,)))
+    _install(monkeypatch, provider)
+    _install_metrics(monkeypatch, metrics_access)
+    # A wide virtual terminal so Rich does not truncate the container table.
+    result = runner.invoke(
+        app, ["host", "specs", "--config", str(config_file)], env={"COLUMNS": "120"}
+    )
+    assert result.exit_code == 0
+    assert "█" in result.output  # bars are drawn
+    assert "25.0%" in result.output  # host mem: 4 GiB of 16 GiB
+    assert "12.5%" in result.output  # container cpu: 50% of one core / 4 cores
+    assert "2.7%" in result.output  # container mem, parsed from docker's "2.68%"
+    assert "427.2MiB" in result.output
+
+
+def test_specs_renders_unparseable_docker_percents_verbatim(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    provider = FakeHostProvider(HostStatus(HostPowerState.RUNNING, "1.2.3.4", "VM running"))
+    container = ContainerMetrics(
+        name="devcontainer-billet-1",
+        status="Up 52 minutes",
+        cpu_percent="--",
+        mem_usage="-- / --",
+        mem_percent="--",
+    )
+    metrics_access = FakeMetricsAccess(make_host_metrics(containers=(container,)))
+    _install(monkeypatch, provider)
+    _install_metrics(monkeypatch, metrics_access)
+    result = runner.invoke(app, ["host", "specs", "--config", str(config_file)])
+    assert result.exit_code == 0
+    assert "--" in result.output
 
 
 def test_specs_on_a_deallocated_host_exits_cleanly(
