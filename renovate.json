@@ -1,0 +1,15 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Bump the pinned canon marketplace tag in .claude/settings.json when rinman24/canon ships a new release tag.",
+      "fileMatch": ["^\\.claude/settings\\.json$"],
+      "matchStrings": [
+        "\"repo\":\\s*\"rinman24/canon\",\\s*\"ref\":\\s*\"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "depNameTemplate": "rinman24/canon",
+      "datasourceTemplate": "github-tags"
+    }
+  ]
+}

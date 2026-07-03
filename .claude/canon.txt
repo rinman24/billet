@@ -1,0 +1,9 @@
+# Canon modules this repo requires (one per line; verified by the canon-core
+# SessionStart hook and by tests/meta/test_canon_adoption.py).
+architecture-closed
+delivery-vertical-slice
+dev-hygiene
+git-semilinear
+testing-conventions
+worktree-isolation
+typing-python

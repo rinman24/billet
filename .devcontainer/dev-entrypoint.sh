@@ -38,4 +38,9 @@ sudo /usr/sbin/sshd -t
 echo "dev-entrypoint: starting sshd (container :22, published to the VM loopback)"
 sudo /usr/sbin/sshd
 
+# Canon activation: install the canon-core Claude Code plugin via the vendored
+# setup-canon.sh (idempotent — a no-op once installed). Non-fatal by design: a canon
+# hiccup must never take down sshd or the CMD hand-off.
+bash "$(dirname "$0")/setup-canon.sh" || echo "dev-entrypoint: canon activation failed (non-fatal)"
+
 exec "$@"
