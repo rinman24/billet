@@ -2,13 +2,20 @@
 
 import pytest
 
-from billet.contracts import SshConfigBlock, WorkspaceStepKind
+from billet.contracts import (
+    DevcontainerFacts,
+    RemoteHost,
+    SshConfigBlock,
+    WorkspaceSpec,
+    WorkspaceStepKind,
+)
 from billet.shared.errors import ConfigError
 from billet.workspace.manager.workspace_manager import WorkspaceManager
 from tests.unit._fakes import (
     FakeContainerAccess,
     FakeSourceAccess,
     FakeSshConfigAccess,
+    RecordingPlanObserver,
     make_devcontainer_facts,
     make_remote_host,
     make_workspace_spec,
@@ -131,6 +138,42 @@ def test_start_skips_personal_bootstrap_when_empty() -> None:
     assert "run_personal_bootstrap" not in container.calls
 
 
+def test_apply_start_emits_started_then_succeeded_for_every_step_in_order() -> None:
+    manager, *_ = _manager()
+    plan = manager.plan_start(SPEC, verify=True)
+    observer = RecordingPlanObserver()
+    manager.apply_start(plan, SPEC, REMOTE, personal_bootstrap_cmd="", observer=observer)
+    expected: list[tuple[str, object]] = []
+    for step in plan.steps:
+        expected += [("started", step), ("succeeded", step)]
+    assert observer.events == expected
+
+
+def test_apply_start_emits_failed_reraises_and_runs_no_later_steps() -> None:
+    class ExplodingContainer(FakeContainerAccess):
+        def run_post_create(
+            self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts
+        ) -> None:
+            super().run_post_create(spec, remote, facts)
+            raise ConfigError("boom")
+
+    container = ExplodingContainer()
+    manager, *_ = _manager(container=container)
+    plan = manager.plan_start(SPEC, verify=True)  # ensure_source, compose_up, post_create, verify
+    observer = RecordingPlanObserver()
+    with pytest.raises(ConfigError, match="boom"):
+        manager.apply_start(plan, SPEC, REMOTE, personal_bootstrap_cmd="", observer=observer)
+    assert observer.events == [
+        ("started", plan.steps[0]),
+        ("succeeded", plan.steps[0]),
+        ("started", plan.steps[1]),
+        ("succeeded", plan.steps[1]),
+        ("started", plan.steps[2]),
+        ("failed", plan.steps[2]),
+    ]
+    assert "verify" not in container.calls
+
+
 # --- stop --------------------------------------------------------------------------
 
 
@@ -139,6 +182,32 @@ def test_apply_stop_reads_facts_then_stops() -> None:
     plan = manager.plan_stop(SPEC)
     manager.apply_stop(plan, SPEC, REMOTE)
     assert container.calls == ["read_facts", "compose_stop"]
+
+
+def test_apply_stop_emits_started_then_succeeded_for_the_stop_step() -> None:
+    manager, *_ = _manager()
+    plan = manager.plan_stop(SPEC)
+    observer = RecordingPlanObserver()
+    manager.apply_stop(plan, SPEC, REMOTE, observer)
+    step = plan.steps[0]
+    assert observer.events == [("started", step), ("succeeded", step)]
+
+
+def test_apply_stop_emits_failed_and_reraises_when_stop_raises() -> None:
+    class ExplodingContainer(FakeContainerAccess):
+        def compose_stop(
+            self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts
+        ) -> None:
+            super().compose_stop(spec, remote, facts)
+            raise ConfigError("boom")
+
+    manager, *_ = _manager(container=ExplodingContainer())
+    plan = manager.plan_stop(SPEC)
+    observer = RecordingPlanObserver()
+    with pytest.raises(ConfigError, match="boom"):
+        manager.apply_stop(plan, SPEC, REMOTE, observer)
+    step = plan.steps[0]
+    assert observer.events == [("started", step), ("failed", step)]
 
 
 # --- connect -----------------------------------------------------------------------

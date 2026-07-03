@@ -10,13 +10,15 @@ refined in ADR-0002). ``connect`` hands back an argv for the client to ``exec`` 
 manager never replaces the process itself, which keeps it unit-testable.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import shlex
 
 from billet.contracts import (
     ContainerAccess,
     DevcontainerFacts,
     HostSpec,
+    NullPlanObserver,
+    PlanObserver,
     RemoteHost,
     SourceAccess,
     SshConfigAccess,
@@ -120,25 +122,55 @@ class WorkspaceManager:
         remote: RemoteHost,
         *,
         personal_bootstrap_cmd: str,
+        observer: PlanObserver | None = None,
     ) -> DevcontainerFacts:
         """Execute a start plan; return the facts read from the repo's devcontainer.json.
 
         ``personal_bootstrap_cmd`` is required so plan/apply coupling stays explicit: pass
         the same value the plan was built with (empty disables the phase in both places).
+
+        The ``observer`` receives semantic started/succeeded/failed events per step (the
+        manager still never prints); a failed step re-raises and aborts the remainder.
         """
-        kinds = {step.kind for step in plan.steps}
-        if WorkspaceStepKind.ENSURE_SOURCE in kinds:
+        obs: PlanObserver = observer if observer is not None else NullPlanObserver()
+        facts: DevcontainerFacts | None = None
+
+        def read_facts_once() -> DevcontainerFacts:
+            nonlocal facts
+            if facts is None:
+                facts = self._container.read_facts(spec, remote)
+            return facts
+
+        for step in plan.steps:
+            obs.step_started(step)
+            try:
+                self._dispatch_start(
+                    step.kind, spec, remote, read_facts_once, personal_bootstrap_cmd
+                )
+            except Exception:
+                obs.step_failed(step)
+                raise
+            obs.step_succeeded(step)
+        return read_facts_once()
+
+    def _dispatch_start(
+        self,
+        kind: WorkspaceStepKind,
+        spec: WorkspaceSpec,
+        remote: RemoteHost,
+        facts: Callable[[], DevcontainerFacts],
+        personal_bootstrap_cmd: str,
+    ) -> None:
+        if kind is WorkspaceStepKind.ENSURE_SOURCE:
             self._source.ensure_clone(spec, remote)
-        facts = self._container.read_facts(spec, remote)
-        if WorkspaceStepKind.COMPOSE_UP in kinds:
-            self._container.compose_up(spec, remote, facts)
-        if WorkspaceStepKind.POST_CREATE in kinds:
-            self._container.run_post_create(spec, remote, facts)
-        if WorkspaceStepKind.PERSONAL_BOOTSTRAP in kinds:
-            self._container.run_personal_bootstrap(spec, remote, facts, personal_bootstrap_cmd)
-        if WorkspaceStepKind.VERIFY in kinds:
-            self._container.verify(spec, remote, facts)
-        return facts
+        elif kind is WorkspaceStepKind.COMPOSE_UP:
+            self._container.compose_up(spec, remote, facts())
+        elif kind is WorkspaceStepKind.POST_CREATE:
+            self._container.run_post_create(spec, remote, facts())
+        elif kind is WorkspaceStepKind.PERSONAL_BOOTSTRAP:
+            self._container.run_personal_bootstrap(spec, remote, facts(), personal_bootstrap_cmd)
+        elif kind is WorkspaceStepKind.VERIFY:
+            self._container.verify(spec, remote, facts())
 
     # --- stop ----------------------------------------------------------------------
 
@@ -153,12 +185,26 @@ class WorkspaceManager:
             ),
         )
 
-    def apply_stop(self, plan: WorkspacePlan, spec: WorkspaceSpec, remote: RemoteHost) -> None:
-        """Execute a stop plan."""
-        if not any(step.kind is WorkspaceStepKind.COMPOSE_STOP for step in plan.steps):
+    def apply_stop(
+        self,
+        plan: WorkspacePlan,
+        spec: WorkspaceSpec,
+        remote: RemoteHost,
+        observer: PlanObserver | None = None,
+    ) -> None:
+        """Execute a stop plan, emitting started/succeeded/failed events per step."""
+        obs: PlanObserver = observer if observer is not None else NullPlanObserver()
+        step = next((s for s in plan.steps if s.kind is WorkspaceStepKind.COMPOSE_STOP), None)
+        if step is None:
             return
-        facts = self._container.read_facts(spec, remote)
-        self._container.compose_stop(spec, remote, facts)
+        obs.step_started(step)
+        try:
+            facts = self._container.read_facts(spec, remote)
+            self._container.compose_stop(spec, remote, facts)
+        except Exception:
+            obs.step_failed(step)
+            raise
+        obs.step_succeeded(step)
 
     # --- connect -------------------------------------------------------------------
 

@@ -5,7 +5,16 @@ The manager *plans* (reads live state, composes an ordered :class:`Plan`) and *a
 billable-create confirm live in the client. See ADR-0001.
 """
 
-from billet.contracts import HostPowerState, HostProvider, HostSpec, Plan, PlanStep, StepKind
+from billet.contracts import (
+    HostPowerState,
+    HostProvider,
+    HostSpec,
+    NullPlanObserver,
+    Plan,
+    PlanObserver,
+    PlanStep,
+    StepKind,
+)
 from billet.shared.errors import HostOperationError
 
 
@@ -90,10 +99,21 @@ class HostManager:
         self._provider.preflight()
         return Plan(host_key=spec.key, steps=(_pin_step(spec),))
 
-    def apply(self, plan: Plan, spec: HostSpec) -> None:
-        """Execute each step in order against the provider."""
+    def apply(self, plan: Plan, spec: HostSpec, observer: PlanObserver | None = None) -> None:
+        """Execute each step in order against the provider, emitting lifecycle events.
+
+        The observer receives semantic started/succeeded/failed events per step (the
+        manager still never prints); a failed step re-raises and aborts the remainder.
+        """
+        obs: PlanObserver = observer if observer is not None else NullPlanObserver()
         for step in plan.steps:
-            self._dispatch(step.kind, spec)
+            obs.step_started(step)
+            try:
+                self._dispatch(step.kind, spec)
+            except Exception:
+                obs.step_failed(step)
+                raise
+            obs.step_succeeded(step)
 
     def _dispatch(self, kind: StepKind, spec: HostSpec) -> None:
         if kind is StepKind.CREATE:

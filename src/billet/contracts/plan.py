@@ -6,6 +6,9 @@ and ``access`` stays purely side-effecting — it never decides whether to run. 
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Protocol
+
+from billet.contracts.workspace import WorkspacePlanStep
 
 
 class StepKind(Enum):
@@ -45,3 +48,37 @@ class Plan:
     def is_billable(self) -> bool:
         """True when any step incurs cloud cost (a cold create)."""
         return any(step.billable for step in self.steps)
+
+
+class PlanObserver(Protocol):
+    """Receives step lifecycle events while a manager applies a plan.
+
+    The observation seam of ADR-0001: managers emit semantic events (they still never
+    print); the client decides how to render them. Host and Workspace plans carry sibling
+    step types, so each event takes the union — one observer serves both managers.
+    """
+
+    def step_started(self, step: PlanStep | WorkspacePlanStep) -> None:
+        """Handle a step being dispatched (fires immediately before)."""
+        ...
+
+    def step_succeeded(self, step: PlanStep | WorkspacePlanStep) -> None:
+        """Handle a step's dispatch returning without raising."""
+        ...
+
+    def step_failed(self, step: PlanStep | WorkspacePlanStep) -> None:
+        """Handle a step's dispatch raising; the exception then propagates."""
+        ...
+
+
+class NullPlanObserver:
+    """The silent default observer — every event is a no-op (headless applies)."""
+
+    def step_started(self, step: PlanStep | WorkspacePlanStep) -> None:
+        """Ignore the event."""
+
+    def step_succeeded(self, step: PlanStep | WorkspacePlanStep) -> None:
+        """Ignore the event."""
+
+    def step_failed(self, step: PlanStep | WorkspacePlanStep) -> None:
+        """Ignore the event."""
