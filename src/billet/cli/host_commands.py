@@ -13,7 +13,7 @@ import typer
 
 from billet.access.host.azure_vm_provider import AzureVmHostProvider
 from billet.access.registry.toml_registry_access import RegistryAccess
-from billet.cli import _planio
+from billet.cli import _console, _planio
 from billet.contracts import HostProvider, HostSpec
 from billet.host.manager.host_manager import HostManager
 from billet.infrastructure.process import SubprocessRunner
@@ -64,10 +64,12 @@ def up(
 ) -> None:
     """Bring a Host up (cold provision or resume, auto-detected)."""
     try:
-        manager, spec, key = _build(config, host)
-        plan = manager.plan_up(spec)
-        if _planio.should_apply(plan, dry_run=dry_run, yes=yes):
-            manager.apply(plan, spec)
+        with _console.planning_status():
+            manager, spec, key = _build(config, host)
+            plan = manager.plan_up(spec)
+        if _planio.run_plan(
+            plan, dry_run=dry_run, yes=yes, apply=lambda obs: manager.apply(plan, spec, obs)
+        ):
             typer.echo(f"[billet] host '{key}' is up.")
     except BilletError as exc:
         _planio.fail(exc)
@@ -82,10 +84,12 @@ def stop(
 ) -> None:
     """Deallocate a Host (stops compute billing; the OS disk persists)."""
     try:
-        manager, spec, key = _build(config, host)
-        plan = manager.plan_stop(spec)
-        if _planio.should_apply(plan, dry_run=dry_run, yes=yes):
-            manager.apply(plan, spec)
+        with _console.planning_status():
+            manager, spec, key = _build(config, host)
+            plan = manager.plan_stop(spec)
+        if _planio.run_plan(
+            plan, dry_run=dry_run, yes=yes, apply=lambda obs: manager.apply(plan, spec, obs)
+        ):
             typer.echo(f"[billet] host '{key}' is deallocated.")
     except BilletError as exc:
         _planio.fail(exc)
@@ -99,10 +103,12 @@ def pin_ip(
 ) -> None:
     """Re-pin the inbound SSH rule to your current egress IP/32 (no state change)."""
     try:
-        manager, spec, key = _build(config, host)
-        plan = manager.plan_pin_ip(spec)
-        if _planio.should_apply(plan, dry_run=dry_run, yes=True):
-            manager.apply(plan, spec)
+        with _console.planning_status():
+            manager, spec, key = _build(config, host)
+            plan = manager.plan_pin_ip(spec)
+        if _planio.run_plan(
+            plan, dry_run=dry_run, yes=True, apply=lambda obs: manager.apply(plan, spec, obs)
+        ):
             typer.echo(f"[billet] host '{key}' inbound SSH re-pinned.")
     except BilletError as exc:
         _planio.fail(exc)

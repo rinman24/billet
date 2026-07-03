@@ -5,11 +5,13 @@ managers — render plans, prompt, and turn a :class:`BilletError` into a clean 
 both the host and workspace command groups.
 """
 
+from collections.abc import Callable
 from typing import NoReturn
 
 import typer
 
-from billet.contracts import Plan, WorkspacePlan
+from billet.cli import _console
+from billet.contracts import Plan, PlanObserver, WorkspacePlan
 from billet.shared.errors import BilletError
 
 
@@ -44,6 +46,23 @@ def should_apply(plan: Plan, *, dry_run: bool, yes: bool) -> bool:
     return True
 
 
+def run_plan(
+    plan: Plan, *, dry_run: bool, yes: bool, apply: Callable[[PlanObserver], object]
+) -> bool:
+    """Gate a host plan, then execute it with live progress; True when it applied.
+
+    The gate (:func:`should_apply` — render, dry-run, billable confirm) runs *before*
+    the Live display starts, so the ``typer.confirm`` prompt is never painted over.
+    ``apply`` is the manager call bound to everything except the observer; host and
+    workspace apply signatures differ, so the thunk keeps this helper shape-agnostic.
+    """
+    if not should_apply(plan, dry_run=dry_run, yes=yes):
+        return False
+    with _console.PlanRenderer(plan.steps) as observer:
+        apply(observer)
+    return True
+
+
 def render_workspace_plan(plan: WorkspacePlan) -> None:
     """Render a :class:`WorkspacePlan` for the operator."""
     if plan.is_empty:
@@ -52,3 +71,16 @@ def render_workspace_plan(plan: WorkspacePlan) -> None:
     typer.echo(f"[billet] plan for workspace '{plan.workspace_key}':")
     for step in plan.steps:
         typer.echo(f"  + {step.summary}")
+
+
+def run_workspace_plan(plan: WorkspacePlan, *, apply: Callable[[PlanObserver], object]) -> None:
+    """Render a workspace plan, then execute it with live progress (no-op when empty).
+
+    Workspace plans carry no billable gate, so there is no prompt: render, then hand a
+    :class:`~billet.cli._console.PlanRenderer` to the manager via the ``apply`` thunk.
+    """
+    render_workspace_plan(plan)
+    if plan.is_empty:
+        return
+    with _console.PlanRenderer(plan.steps) as observer:
+        apply(observer)
