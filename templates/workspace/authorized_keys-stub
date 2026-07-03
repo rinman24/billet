@@ -1,0 +1,4 @@
+# Tracked empty stub. docker-compose.yml bind-mounts this as /home/dev/.ssh/authorized_keys
+# when DEVBOX_AUTHORIZED_KEYS is unset, so a build on a machine without the VM's
+# authorized_keys never hard-fails. sshd trusts no keys in that case — set
+# DEVBOX_AUTHORIZED_KEYS in the gitignored .devcontainer/.env on the VM (see .env.example).

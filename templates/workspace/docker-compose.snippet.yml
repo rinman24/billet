@@ -1,0 +1,33 @@
+# Merge into the repo's .devcontainer/docker-compose.yml — this is NOT a standalone
+# compose file. Replace <service> with the compose service devcontainer.json names,
+# <workspaceFolder> with the devcontainer.json workspaceFolder, and <port> with the
+# container_ssh_port billet assigns this Workspace (its per-host uniqueness is validated
+# by `billet add`). Using the Workspace's OWN assigned port as the interpolation default
+# keeps a manual `docker compose up` on the VM from colliding with another Workspace's
+# port; under billet the default never applies because BILLET_CONTAINER_SSH_PORT is
+# exported before every compose call (ADR-0003).
+
+services:
+  <service>:
+    volumes:
+      # Container sshd trusts the operator's forwarded key via a read-only bind-mount of
+      # the VM's existing authorized_keys — single source of trust. Defaults to the empty
+      # tracked stub so a non-VM build never hard-fails. On the VM set
+      # DEVBOX_AUTHORIZED_KEYS in the gitignored .devcontainer/.env (see .env.example).
+      - ${DEVBOX_AUTHORIZED_KEYS:-./authorized_keys-stub}:/home/dev/.ssh/authorized_keys:ro
+      # Persisted container SSH host keys → stable identity across rebuild/recreate
+      # (stable HostKeyAlias, no known_hosts churn). Generated on first boot if absent.
+      - <service>-sshd-keys:/etc/ssh/host_keys
+    # Bring up the in-container sshd, then run the CMD (`sleep infinity`). `bash <script>`
+    # avoids any dependence on the bind-mounted file's exec bit.
+    entrypoint: ["bash", "<workspaceFolder>/.devcontainer/dev-entrypoint.sh"]
+    command: sleep infinity
+    # docker-init (tini) as PID 1 reaps sshd's re-parented per-connection children.
+    init: true
+    # In-container sshd published to the VM loopback ONLY (never internet-facing, so the
+    # Host NSG stays a single :22→operator-IP rule).
+    ports:
+      - "127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-<port>}:22"
+
+volumes:
+  <service>-sshd-keys:
