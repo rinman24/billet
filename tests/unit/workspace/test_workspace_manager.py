@@ -43,6 +43,19 @@ def test_register_renders_a_pasteable_block() -> None:
     assert 'container_alias = "gswa-container"' in block
 
 
+def test_register_omits_status_color_when_unset() -> None:
+    manager, *_ = _manager()
+    block = manager.register(SPEC, existing=[])  # SPEC.status_color is None
+    assert "status_color" not in block
+
+
+def test_register_renders_status_color_when_set() -> None:
+    manager, *_ = _manager()
+    spec = make_workspace_spec(status_color="#C05CE0")
+    block = manager.register(spec, existing=[])
+    assert 'status_color = "#C05CE0"' in block
+
+
 def test_register_rejects_a_port_collision() -> None:
     manager, *_ = _manager()
     other = make_workspace_spec(key="other", host="devbox", container_ssh_port=2222)
@@ -138,7 +151,21 @@ def test_connect_target_builds_tty_tmux_argv_through_the_container_alias() -> No
     assert "-t" in argv
     assert "gswa-container" in argv  # via the alias (no user@host)
     assert argv[-1] == (
-        "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 tmux new-session -A -s main bash -l"
+        "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 tmux "
+        "set -g status-left ' gswa-backend ' \\; set -g status-left-length 14 \\; "
+        "new-session -A -s main bash -l"
+    )
+
+
+def test_connect_target_applies_status_color_to_the_status_bar() -> None:
+    manager, *_ = _manager()
+    spec = make_workspace_spec(status_color="#C05CE0")
+    argv = manager.connect_target(spec, FACTS)
+    assert argv[-1] == (
+        "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 tmux "
+        "set -g status-style 'bg=#C05CE0,fg=#000000' \\; "
+        "set -g status-left ' gswa-backend ' \\; set -g status-left-length 14 \\; "
+        "new-session -A -s main bash -l"
     )
 
 
