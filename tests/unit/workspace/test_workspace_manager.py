@@ -9,7 +9,7 @@ from billet.contracts import (
     WorkspaceSpec,
     WorkspaceStepKind,
 )
-from billet.shared.errors import ConfigError
+from billet.shared.errors import ConfigError, HostOperationError
 from billet.workspace.manager.workspace_manager import WorkspaceManager
 from tests.unit._fakes import (
     FakeContainerAccess,
@@ -247,16 +247,30 @@ def test_status_all_reports_running_state() -> None:
     assert len(statuses) == 1
     assert statuses[0].key == "gswa-backend"
     assert statuses[0].running is True
+    assert statuses[0].reachable is True
 
 
-def test_status_all_reports_not_running_on_unreachable_host() -> None:
-    class Unreachable(FakeContainerAccess):
+def test_status_all_reports_not_running_when_repo_missing() -> None:
+    # A reachable host without the repo cloned is "stopped", not "unreachable".
+    class RepoMissing(FakeContainerAccess):
         def read_facts(self, spec, remote):  # type: ignore[no-untyped-def]
             raise ConfigError("could not read devcontainer.json")
+
+    manager, *_ = _manager(container=RepoMissing())
+    statuses = manager.status_all([(SPEC, REMOTE)])
+    assert statuses[0].running is False
+    assert statuses[0].reachable is True
+
+
+def test_status_all_reports_unreachable_host_distinctly() -> None:
+    class Unreachable(FakeContainerAccess):
+        def read_facts(self, spec, remote):  # type: ignore[no-untyped-def]
+            raise HostOperationError("could not reach 20.0.0.5 over SSH")
 
     manager, *_ = _manager(container=Unreachable())
     statuses = manager.status_all([(SPEC, REMOTE)])
     assert statuses[0].running is False
+    assert statuses[0].reachable is False
 
 
 # --- ssh-config --------------------------------------------------------------------
