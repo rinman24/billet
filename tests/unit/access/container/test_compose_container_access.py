@@ -7,7 +7,7 @@ import pytest
 
 from billet.access.container.compose_container_access import ComposeContainerAccess
 from billet.infrastructure.process import CompletedProcess
-from billet.shared.errors import ConfigError, ProcessError
+from billet.shared.errors import ConfigError, HostOperationError, ProcessError
 from tests.unit._fakes import (
     FakeProcessRunner,
     completed,
@@ -81,6 +81,13 @@ def test_read_facts_normalizes_list_post_create() -> None:
 def test_read_facts_raises_when_file_unreadable() -> None:
     access, _ = _access(lambda _argv: completed(returncode=1, stderr="No such file"))
     with pytest.raises(ConfigError, match="could not read"):
+        access.read_facts(SPEC, REMOTE)
+
+
+def test_read_facts_raises_host_error_when_ssh_cannot_connect() -> None:
+    # ssh exits 255 for its own failures — a deallocated host, not a missing repo.
+    access, _ = _access(lambda _argv: completed(returncode=255, stderr="Connection timed out"))
+    with pytest.raises(HostOperationError, match="could not reach"):
         access.read_facts(SPEC, REMOTE)
 
 
@@ -250,3 +257,20 @@ def test_is_running_true_when_ps_returns_a_container_id() -> None:
 def test_is_running_false_when_ps_empty() -> None:
     access, _ = _access(lambda _argv: completed(stdout=""))
     assert access.is_running(SPEC, REMOTE, FACTS) is False
+
+
+def test_is_running_raises_host_error_when_ssh_cannot_connect() -> None:
+    access, _ = _access(lambda _argv: completed(returncode=255, stderr="Connection timed out"))
+    with pytest.raises(HostOperationError, match="could not reach"):
+        access.is_running(SPEC, REMOTE, FACTS)
+
+
+def test_every_ssh_call_bounds_connection_establishment() -> None:
+    # A deallocated Azure host drops packets: without ConnectTimeout, probes hang forever.
+    access, runner = _access(lambda _argv: completed(stdout=_GSWA_DEVCONTAINER))
+    access.read_facts(SPEC, REMOTE)
+    access.is_running(SPEC, REMOTE, FACTS)
+    access.compose_stop(SPEC, REMOTE, FACTS)
+    access.run_personal_bootstrap(SPEC, REMOTE, FACTS, "bash ~/dotfiles/install.sh")
+    for command in runner.commands():
+        assert "ConnectTimeout=5" in command

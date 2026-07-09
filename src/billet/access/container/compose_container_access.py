@@ -22,10 +22,18 @@ from billet.contracts import DevcontainerFacts, RemoteHost, WorkspaceSpec
 from billet.infrastructure import ssh
 from billet.infrastructure.process import ProcessRunner
 from billet.shared import jsonc
-from billet.shared.errors import ConfigError
+from billet.shared.errors import ConfigError, HostOperationError
 
 _DEVCONTAINER_REL = ".devcontainer/devcontainer.json"
 _DEVCONTAINER_DIR = ".devcontainer"
+
+# Bound connection establishment only (never command runtime): a deallocated Azure host
+# drops inbound packets, so an untimed probe would hang `billet ls` indefinitely.
+_SSH_CONNECT_TIMEOUT = 5
+
+# ssh(1) reserves exit 255 for its own failures (connect/auth); remote commands never
+# produce it, so it cleanly separates "host unreachable" from "command failed on host".
+_SSH_TRANSPORT_RC = 255
 
 
 def _as_str_list(value: Any, what: str) -> list[str]:
@@ -80,9 +88,14 @@ class ComposeContainerAccess:
         """Read + parse ``<repo_dir>/.devcontainer/devcontainer.json`` on the host."""
         path = posixpath.join(spec.repo_dir, _DEVCONTAINER_REL)
         argv = ssh.ssh_argv(
-            remote.admin_user, remote.ip, f"cat {shlex.quote(path)}", batch_mode=True
+            remote.admin_user,
+            remote.ip,
+            f"cat {shlex.quote(path)}",
+            connect_timeout=_SSH_CONNECT_TIMEOUT,
+            batch_mode=True,
         )
         result = self._runner.run(argv, check=False)
+        _assert_transport_ok(result.returncode, remote)
         if result.returncode != 0:
             raise ConfigError(
                 f"could not read {path} on {remote.ip} — is the repo cloned? "
@@ -137,9 +150,7 @@ class ComposeContainerAccess:
         """
         if not command:
             return
-        argv = ssh.ssh_argv(
-            remote.admin_user, remote.ip, "bash -se", batch_mode=True, forward_agent=True
-        )
+        argv = _script_argv(remote, forward_agent=True)
         self._runner.run(argv, input_text=self._personal_bootstrap_script(spec, facts, command))
 
     def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
@@ -156,15 +167,15 @@ class ComposeContainerAccess:
         """Return whether the service container is currently running."""
         ps = _compose_cmd(facts, "ps", "--status", "running", "-q", shlex.quote(facts.service))
         script = _prelude(spec) + ps + "\n"
-        argv = ssh.ssh_argv(remote.admin_user, remote.ip, "bash -se", batch_mode=True)
+        argv = _script_argv(remote)
         result = self._runner.run(argv, input_text=script, check=False)
+        _assert_transport_ok(result.returncode, remote)
         return bool(result.stdout.strip())
 
     # --- helpers -------------------------------------------------------------------
 
     def _run_script(self, remote: RemoteHost, script: str) -> None:
-        argv = ssh.ssh_argv(remote.admin_user, remote.ip, "bash -se", batch_mode=True)
-        self._runner.run(argv, input_text=script)
+        self._runner.run(_script_argv(remote), input_text=script)
 
     @staticmethod
     def _compose_up_script(spec: WorkspaceSpec, facts: DevcontainerFacts) -> str:
@@ -222,6 +233,27 @@ class ComposeContainerAccess:
             f" bash -lc {shlex.quote(shlex.quote(inner))}"
         )
         return "set -euo pipefail\n" + hop + "\n"
+
+
+def _script_argv(remote: RemoteHost, *, forward_agent: bool = False) -> list[str]:
+    """Build the ``ssh … bash -se`` argv every remote script runs through."""
+    return ssh.ssh_argv(
+        remote.admin_user,
+        remote.ip,
+        "bash -se",
+        connect_timeout=_SSH_CONNECT_TIMEOUT,
+        batch_mode=True,
+        forward_agent=forward_agent,
+    )
+
+
+def _assert_transport_ok(returncode: int, remote: RemoteHost) -> None:
+    """Raise ``HostOperationError`` when ssh itself failed rather than the remote command."""
+    if returncode == _SSH_TRANSPORT_RC:
+        raise HostOperationError(
+            f"could not reach {remote.ip} over SSH — is the Host up? "
+            "Run `billet host up` to start it."
+        )
 
 
 def _prelude(spec: WorkspaceSpec) -> str:
