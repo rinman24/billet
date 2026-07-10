@@ -226,6 +226,14 @@ class WorkspaceManager:
         into glibc, needs no locale-gen, and overrides any forwarded ``LC_*`` via
         ``LC_ALL``, so tmux and everything inside it always run UTF-8.
 
+        ``TERM`` is pinned to ``xterm-256color`` for the same reason: ssh forwards the
+        client's ``TERM``, and newer terminal emulators (Ghostty's ``xterm-ghostty``,
+        kitty's ``xterm-kitty``) name terminfo entries most container images do not
+        ship — tmux then aborts with ``missing or unsuitable terminal`` before the
+        session ever starts. ``xterm-256color`` exists in every ncurses base install
+        and is all tmux needs; the pin applies only to this remote command, so the
+        operator's local terminal is untouched.
+
         The session's status bar is *branded* via a ``set -g`` prelude
         (:class:`TmuxStatusEngine`): the Workspace key is always shown on the left, and the
         optional ``status_color`` tints the bar so an operator can tell otherwise-identical
@@ -238,7 +246,7 @@ class WorkspaceManager:
         prelude = self._tmux_status.render_prelude(label=spec.key, color=spec.status_color)
         remote_command = (
             f"cd {shlex.quote(facts.workspace_folder)} && "
-            "exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 "
+            "exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 TERM=xterm-256color "
             f"tmux {prelude}new-session -A -s {shlex.quote(spec.tmux_session)} bash -l"
         )
         # user=None: the container alias in ssh-config already supplies user/host/port.

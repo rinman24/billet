@@ -237,7 +237,7 @@ def test_connect_execs_tmux_argv(monkeypatch: pytest.MonkeyPatch, config_file: P
     assert "-t" in argv
     assert "gswa-container" in argv
     assert argv[-1] == (
-        "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 tmux "
+        "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 TERM=xterm-256color tmux "
         "set -g status-left ' gswa-backend ' \\; set -g status-left-length 14 \\; "
         "new-session -A -s main bash -l"
     )
