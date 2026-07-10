@@ -76,7 +76,7 @@ def _install(
     def _provider_factory(_subscription_id: str) -> FakeHostProvider:
         return prov
 
-    def _manager_factory() -> WorkspaceManager:
+    def _manager_factory(on_line: object = None) -> WorkspaceManager:
         return manager
 
     monkeypatch.setattr(wc, "provider_factory", _provider_factory)

@@ -12,7 +12,7 @@ These commands are registered on the root app at top level by :func:`register`.
 from collections.abc import Callable, Sequence
 import os
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, NoReturn, Protocol
 
 import typer
 
@@ -31,22 +31,47 @@ from billet.contracts import (
     WorkspaceStatus,
 )
 from billet.host.manager.host_manager import HostManager
-from billet.infrastructure.process import SubprocessRunner
+from billet.infrastructure.process import OnLine, SubprocessRunner
 from billet.shared.errors import BilletError, HostOperationError
 from billet.workspace.manager.workspace_manager import WorkspaceManager
 
 ProviderFactory = Callable[[str], HostProvider]
-WorkspaceManagerFactory = Callable[[], WorkspaceManager]
+
+
+class WorkspaceManagerFactory(Protocol):
+    """Builds a WorkspaceManager; ``on_line`` (optional) streams the compose-up output."""
+
+    def __call__(self, on_line: OnLine | None = None) -> WorkspaceManager:
+        """Return a manager wired over the concrete access implementations."""
+        ...
+
+
+class _ComposeLineSink:
+    """A late-bound line sink for the compose-up stream.
+
+    The access object is constructed (via the factory) before the checklist exists, so
+    the sink is wired in first and ``target`` is pointed at the checklist once built.
+    """
+
+    def __init__(self) -> None:
+        self.target: OnLine | None = None
+
+    def __call__(self, line: str) -> None:
+        """Forward ``line`` to the bound target (drop it while unbound)."""
+        if self.target is not None:
+            self.target(line)
 
 
 def _default_provider_factory(subscription_id: str) -> HostProvider:
     return AzureVmHostProvider(SubprocessRunner(), subscription_id=subscription_id)
 
 
-def _default_workspace_manager_factory() -> WorkspaceManager:
+def _default_workspace_manager_factory(on_line: OnLine | None = None) -> WorkspaceManager:
     runner = SubprocessRunner()
     return WorkspaceManager(
-        GitSourceAccess(runner), ComposeContainerAccess(runner), FileSshConfigAccess()
+        GitSourceAccess(runner),
+        ComposeContainerAccess(runner, on_compose_line=on_line),
+        FileSshConfigAccess(),
     )
 
 
@@ -190,6 +215,7 @@ def start(
 ) -> None:
     """Bring the Host up (if needed), then clone, build, and bootstrap the Workspace."""
     try:
+        compose_lines = _ComposeLineSink()
         with _ui.planning_status():
             registry = _registry(config)
             ws = registry.workspace(key)
@@ -197,7 +223,7 @@ def start(
             global_config = registry.global_config()
             provider = provider_factory(global_config.subscription_id)
             host_manager = HostManager(provider)
-            manager = workspace_manager_factory()
+            manager = workspace_manager_factory(compose_lines)
             manager.assert_placement(host)  # ADR-0004: refuse manages_workspaces=false
             host_plan = host_manager.plan_up(host)
             ws_plan = manager.plan_start(
@@ -223,6 +249,7 @@ def start(
             ],
             title=f"posting {key} → {ws.host}",
         )
+        compose_lines.target = checklist.compose_tail()
         with checklist as observer:
             if apply_host:
                 host_manager.apply(host_plan, host, observer)

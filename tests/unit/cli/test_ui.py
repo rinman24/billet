@@ -418,3 +418,52 @@ def test_banner_rack_on_tty_one_liner_piped() -> None:
     plain, buffer = _plain_console()
     _ui.banner("0.4.0", console=plain)
     assert buffer.getvalue() == "billet 0.4.0\n"
+
+
+# --- compose-up streaming (phase 4) -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("line", "fraction"),
+    [
+        ("#9 [build 5/9] COPY requirements.txt .", 5 / 9),
+        ("#5 [2/7] RUN pip install -r requirements.txt", 2 / 7),
+        ("#12 [stage-1  4/4] WORKDIR /app", 1.0),  # BuildKit pads stage names for alignment
+        ("#9 0.482 Collecting rich", None),  # build output, not a step marker
+        ("Step 3/9 : COPY . .", None),  # legacy (non-BuildKit) format is not parsed
+        ("#3 [internal] load metadata", None),
+    ],
+)
+def test_buildkit_fraction_parses_step_markers(line: str, fraction: float | None) -> None:
+    assert _ui.buildkit_fraction(line) == fraction
+
+
+def test_compose_tail_feeds_log_and_progress() -> None:
+    console = _terminal_console()
+    phases = [
+        _ui.Phase(
+            key=_ui.COMPOSE_UP_KEY, label="docker compose up · build", group="workspace", bar=True
+        )
+    ]
+    checklist = PhaseChecklist(phases, title="posting api → devbox", console=console)
+    feed = checklist.compose_tail()
+    with checklist:
+        checklist.step_started(_COMPOSE)
+        feed("#9 [build 5/9] COPY requirements.txt .")
+    text = console.export_text()
+    assert "#9 [build 5/9] COPY requirements.txt ." in text  # the log tail renders
+    assert phases[0].progress == 5 / 9  # and the bar went determinate
+
+
+def test_compose_tail_ignores_blank_lines() -> None:
+    console, _ = _plain_console()
+    phases = [
+        _ui.Phase(
+            key=_ui.COMPOSE_UP_KEY, label="docker compose up · build", group="workspace", bar=True
+        )
+    ]
+    checklist = PhaseChecklist(phases, title="t", console=console)
+    feed = checklist.compose_tail()
+    feed("#9 [build 5/9] COPY requirements.txt .")
+    feed("   ")
+    assert phases[0].last_line == "#9 [build 5/9] COPY requirements.txt ."

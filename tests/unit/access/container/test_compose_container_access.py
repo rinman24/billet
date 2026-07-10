@@ -274,3 +274,20 @@ def test_every_ssh_call_bounds_connection_establishment() -> None:
     access.run_personal_bootstrap(SPEC, REMOTE, FACTS, "bash ~/dotfiles/install.sh")
     for command in runner.commands():
         assert "ConnectTimeout=5" in command
+
+
+def test_compose_up_streams_through_the_constructor_sink() -> None:
+    runner = FakeProcessRunner(lambda argv: completed(stdout="#5 [2/7] RUN pip install\n"))
+    seen: list[str] = []
+    access = ComposeContainerAccess(runner, on_compose_line=seen.append)
+    access.compose_up(SPEC, REMOTE, FACTS)
+    assert runner.streamed_calls == [0]  # the compose-up call streamed
+    assert seen == ["#5 [2/7] RUN pip install"]
+
+
+def test_only_compose_up_streams() -> None:
+    runner = FakeProcessRunner(lambda argv: completed(stdout=""))
+    access = ComposeContainerAccess(runner, on_compose_line=lambda line: None)
+    access.compose_stop(SPEC, REMOTE, FACTS)
+    access.verify(SPEC, REMOTE, FACTS)
+    assert runner.streamed_calls == []  # every other operation stays buffered

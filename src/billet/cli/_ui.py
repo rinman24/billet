@@ -6,7 +6,7 @@ centralised here so restyling is a one-file change. Voice per ``brand/BRAND.md``
 terse, lowercase, present tense, no exclamation; status is a color, then a word.
 """
 
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 import re
@@ -684,6 +684,27 @@ _PHASE_GUTTER: dict[str, tuple[str, str]] = {
 
 _BAR_CELLS = 24
 
+# The checklist key of the streaming compose-up phase (the log-tail target).
+COMPOSE_UP_KEY = f"workspace:{WorkspaceStepKind.COMPOSE_UP.value}"
+
+# BuildKit step markers: `#9 [build 5/9] COPY …` (named stage) or `#5 [2/7] RUN …` (base).
+_BUILDKIT_STEP = re.compile(r"#\d+ \[(?:[^\[\]]* )?(\d+)/(\d+)\]")
+
+
+def buildkit_fraction(line: str) -> float | None:
+    """Parse a BuildKit step marker into a 0..1 fraction (None when ``line`` is not one).
+
+    Best-effort by design: a match drives the determinate bar, anything else leaves the
+    pulse bar in place.
+    """
+    match = _BUILDKIT_STEP.search(line)
+    if match is None:
+        return None
+    step, total = int(match.group(1)), int(match.group(2))
+    if total <= 0 or step > total:
+        return None
+    return step / total
+
 
 class PhaseChecklist:
     """A live, in-place checklist that ticks phases as a manager applies a plan.
@@ -767,7 +788,7 @@ class PhaseChecklist:
     def log(self, key: str, line: str) -> None:
         """Show ``line`` as the live log tail under the phase's bar (animated only)."""
         phase = self._by_key.get(key)
-        if phase is not None:
+        if phase is not None and line.strip():
             phase.last_line = line.strip()
 
     # --- rendering -----------------------------------------------------------------------
@@ -810,6 +831,21 @@ class PhaseChecklist:
                 grid.add_column(width=6, justify="right")
                 renderables.append(grid)
         return Group(*renderables)
+
+    def compose_tail(self) -> Callable[[str], None]:
+        """Build the line sink for the compose-up stream: log tail + BuildKit fraction.
+
+        Safe to call from the runner's reader threads — each event is a plain attribute
+        write; the Live refresh thread picks it up on its next frame.
+        """
+
+        def feed(line: str) -> None:
+            self.log(COMPOSE_UP_KEY, line)
+            fraction = buildkit_fraction(line)
+            if fraction is not None:
+                self.set_progress(COMPOSE_UP_KEY, fraction)
+
+        return feed
 
     def __rich__(self) -> Group:
         """Render the checklist frame: title + running total, group rules, phase rows."""
