@@ -30,7 +30,7 @@ from billet.contracts import (
     WorkspaceStepKind,
 )
 from billet.infrastructure import ssh
-from billet.shared.errors import BilletError
+from billet.shared.errors import BilletError, HostOperationError
 from billet.workspace.engine.placement import HostPlacementPolicy
 from billet.workspace.engine.port_allocator import PortAllocator
 from billet.workspace.engine.ssh_config_engine import SshConfigEngine
@@ -249,25 +249,34 @@ class WorkspaceManager:
     def status_all(
         self, items: Sequence[tuple[WorkspaceSpec, RemoteHost]]
     ) -> list[WorkspaceStatus]:
-        """Return the live state of each Workspace; an unreachable Host reports not-running."""
+        """Return the live state of each Workspace; an unreachable Host is reported as such."""
         statuses: list[WorkspaceStatus] = []
         for spec, remote in items:
+            running, reachable = self._probe(spec, remote)
             statuses.append(
                 WorkspaceStatus(
                     key=spec.key,
                     host=spec.host,
                     container_alias=spec.container_alias,
-                    running=self._safe_is_running(spec, remote),
+                    running=running,
+                    reachable=reachable,
                 )
             )
         return statuses
 
-    def _safe_is_running(self, spec: WorkspaceSpec, remote: RemoteHost) -> bool:
+    def _probe(self, spec: WorkspaceSpec, remote: RemoteHost) -> tuple[bool, bool]:
+        """Return ``(running, reachable)`` without letting one bad Host abort the query.
+
+        ``HostOperationError`` marks the Host itself unreachable (SSH transport failure);
+        any other ``BilletError`` (e.g. repo not cloned yet) means reachable-but-not-running.
+        """
         try:
             facts = self._container.read_facts(spec, remote)
-            return self._container.is_running(spec, remote, facts)
+            return self._container.is_running(spec, remote, facts), True
+        except HostOperationError:
+            return False, False
         except BilletError:
-            return False
+            return False, True
 
     # --- ssh-config ----------------------------------------------------------------
 

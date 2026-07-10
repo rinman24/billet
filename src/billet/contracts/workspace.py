@@ -67,12 +67,17 @@ class RemoteHost:
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceStatus:
-    """Live state of one Workspace for ``billet ls``."""
+    """Live state of one Workspace for ``billet ls``.
+
+    ``reachable=False`` means the Host itself could not be contacted over SSH (e.g. a
+    deallocated VM), so ``running`` is unknown rather than a genuine "stopped".
+    """
 
     key: str
     host: str
     container_alias: str
     running: bool
+    reachable: bool
 
 
 class WorkspaceStepKind(Enum):

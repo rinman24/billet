@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from billet.cli import workspace_commands as wc
 from billet.cli.app import app
 from billet.contracts import HostPowerState, HostStatus
+from billet.shared.errors import HostOperationError
 from billet.workspace.manager.workspace_manager import WorkspaceManager
 from tests.unit._fakes import (
     FakeContainerAccess,
@@ -111,6 +112,22 @@ def test_ls_reports_running_state(monkeypatch: pytest.MonkeyPatch, config_file: 
     assert result.exit_code == 0
     assert "gswa-backend" in result.output
     assert "running" in result.output
+
+
+def test_ls_reports_unreachable_host_without_hanging_or_failing(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    # A deallocated host is a normal state (`billet host stop`): ls stays a
+    # successful query and names the recovery command (ADR-0004 §2).
+    class UnreachableContainerAccess(FakeContainerAccess):
+        def read_facts(self, spec, remote):  # type: ignore[no-untyped-def]
+            raise HostOperationError("could not reach 20.0.0.5 over SSH")
+
+    _install(monkeypatch, container=UnreachableContainerAccess())
+    result = runner.invoke(app, ["ls", "--config", str(config_file)])
+    assert result.exit_code == 0
+    assert "unreachable" in result.output
+    assert "billet host up --host devbox" in result.output
 
 
 # --- start -------------------------------------------------------------------------

@@ -126,12 +126,14 @@ def ls(config: _ConfigOption = None) -> None:
         probeable = [
             (ws, _remote_via_alias(host, ws)) for ws, host in rows if host.manages_workspaces
         ]
-        running = {status.key: status.running for status in manager.status_all(probeable)}
+        statuses = {status.key: status for status in manager.status_all(probeable)}
         for ws, host in rows:
             if not host.manages_workspaces:
                 state = "INVALID (host manages_workspaces=false)"
+            elif not statuses[ws.key].reachable:
+                state = f"unreachable (is the Host up? try `billet host up --host {ws.host}`)"
             else:
-                state = "running" if running[ws.key] else "stopped"
+                state = "running" if statuses[ws.key].running else "stopped"
             typer.echo(f"  {ws.key:24} host={ws.host:12} {state}")
     except BilletError as exc:
         _planio.fail(exc)
