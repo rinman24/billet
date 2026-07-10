@@ -220,7 +220,7 @@ def test_connect_target_builds_tty_tmux_argv_through_the_container_alias() -> No
     assert "-t" in argv
     assert "gswa-container" in argv  # via the alias (no user@host)
     assert argv[-1] == (
-        "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 tmux "
+        "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 TERM=xterm-256color tmux "
         "set -g status-left ' gswa-backend ' \\; set -g status-left-length 14 \\; "
         "new-session -A -s main bash -l"
     )
@@ -231,7 +231,7 @@ def test_connect_target_applies_status_color_to_the_status_bar() -> None:
     spec = make_workspace_spec(status_color="#C05CE0")
     argv = manager.connect_target(spec, FACTS)
     assert argv[-1] == (
-        "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 tmux "
+        "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 TERM=xterm-256color tmux "
         "set -g status-style 'bg=#C05CE0,fg=#000000' \\; "
         "set -g status-left ' gswa-backend ' \\; set -g status-left-length 14 \\; "
         "new-session -A -s main bash -l"
