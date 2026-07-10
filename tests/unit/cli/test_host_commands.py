@@ -124,7 +124,7 @@ def test_up_apply_failure_marks_the_step_failed_before_the_error(
     assert result.exit_code == 1
     lines = result.output.splitlines()
     failed = next(index for index, line in enumerate(lines) if "✗ start VM" in line)
-    error = next(index for index, line in enumerate(lines) if "error: az start failed" in line)
+    error = next(index for index, line in enumerate(lines) if "✗ az start failed" in line)
     assert failed < error  # the red ✗ lands before the error report
     assert "wait_until_reachable" not in provider.calls  # later steps never ran
 

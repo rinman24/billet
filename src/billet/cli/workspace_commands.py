@@ -21,7 +21,7 @@ from billet.access.host.azure_vm_provider import AzureVmHostProvider
 from billet.access.registry.toml_registry_access import RegistryAccess
 from billet.access.source.git_source_access import GitSourceAccess
 from billet.access.sshconfig.file_ssh_config_access import FileSshConfigAccess
-from billet.cli import _console, _planio
+from billet.cli import _planio, _ui
 from billet.contracts import HostProvider, HostSpec, RemoteHost, SshConfigBlock, WorkspaceSpec
 from billet.host.manager.host_manager import HostManager
 from billet.infrastructure.process import SubprocessRunner
@@ -151,7 +151,7 @@ def start(
 ) -> None:
     """Bring the Host up (if needed), then clone, build, and bootstrap the Workspace."""
     try:
-        with _console.planning_status():
+        with _ui.planning_status():
             registry = _registry(config)
             ws = registry.workspace(key)
             host = registry.host(ws.host)
@@ -214,7 +214,7 @@ def _resolve_running_remote(provider: HostProvider, host: HostSpec) -> RemoteHos
 def stop(key: _KeyArgument, config: _ConfigOption = None, dry_run: _DryRunOption = False) -> None:
     """Stop a Workspace's compose stack (non-destructive — volumes/data persist)."""
     try:
-        with _console.planning_status():
+        with _ui.planning_status():
             registry = _registry(config)
             ws = registry.workspace(key)
             host = registry.host(ws.host)

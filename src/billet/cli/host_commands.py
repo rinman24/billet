@@ -20,7 +20,7 @@ from billet.access.host.azure_vm_provider import AzureVmHostProvider
 from billet.access.metrics.ssh_metrics_access import SshMetricsAccess
 from billet.access.registry.toml_registry_access import RegistryAccess
 from billet.cli import _planio
-from billet.cli._console import planning_status
+from billet.cli._ui import planning_status
 from billet.contracts import HostMetrics, HostProvider, HostSpec, HostStatus, MetricsAccess
 from billet.host.manager.host_manager import HostManager
 from billet.infrastructure.process import SubprocessRunner

@@ -6,10 +6,11 @@ ssh-config / rm).
 """
 
 from importlib.metadata import version as _dist_version
+from typing import Annotated
 
 import typer
 
-from billet.cli import host_commands, workspace_commands
+from billet.cli import _ui, host_commands, workspace_commands
 
 app = typer.Typer(
     name="billet",
@@ -22,8 +23,17 @@ workspace_commands.register(app)
 
 
 @app.callback()
-def root() -> None:
+def root(
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="stream raw az/ssh/docker output.")
+    ] = False,
+    quiet: Annotated[
+        bool, typer.Option("--quiet", "-q", help="print only outcomes and errors.")
+    ] = False,
+    no_color: Annotated[bool, typer.Option("--no-color", help="disable color output.")] = False,
+) -> None:
     """Manage cloud Hosts and the repos' devcontainer Workspaces that run on them."""
+    _ui.configure(_ui.UIState(quiet=quiet, verbose=verbose, no_color=no_color))
 
 
 @app.command()

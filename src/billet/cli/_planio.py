@@ -10,14 +10,14 @@ from typing import NoReturn
 
 import typer
 
-from billet.cli import _console
+from billet.cli import _ui
 from billet.contracts import Plan, PlanObserver, WorkspacePlan
 from billet.shared.errors import BilletError
 
 
 def fail(exc: BilletError) -> NoReturn:
-    """Print a billet error and exit non-zero (no traceback)."""
-    typer.secho(f"[billet] error: {exc}", fg=typer.colors.RED, err=True)
+    """Render the error view for ``exc`` on stderr and exit 1 (no traceback)."""
+    _ui.render_error(exc)
     raise typer.Exit(1)
 
 
@@ -58,7 +58,7 @@ def run_plan(
     """
     if not should_apply(plan, dry_run=dry_run, yes=yes):
         return False
-    with _console.PlanRenderer(plan.steps) as observer:
+    with _ui.PlanRenderer(plan.steps) as observer:
         apply(observer)
     return True
 
@@ -77,10 +77,10 @@ def run_workspace_plan(plan: WorkspacePlan, *, apply: Callable[[PlanObserver], o
     """Render a workspace plan, then execute it with live progress (no-op when empty).
 
     Workspace plans carry no billable gate, so there is no prompt: render, then hand a
-    :class:`~billet.cli._console.PlanRenderer` to the manager via the ``apply`` thunk.
+    :class:`~billet.cli._ui.PlanRenderer` to the manager via the ``apply`` thunk.
     """
     render_workspace_plan(plan)
     if plan.is_empty:
         return
-    with _console.PlanRenderer(plan.steps) as observer:
+    with _ui.PlanRenderer(plan.steps) as observer:
         apply(observer)
