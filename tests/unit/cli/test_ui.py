@@ -9,6 +9,7 @@ raw copy is asserted directly.
 
 from collections.abc import Iterator
 import io
+import json
 
 import pytest
 from rich.console import Console
@@ -467,3 +468,85 @@ def test_compose_tail_ignores_blank_lines() -> None:
     feed("#9 [build 5/9] COPY requirements.txt .")
     feed("   ")
     assert phases[0].last_line == "#9 [build 5/9] COPY requirements.txt ."
+
+
+# --- phase 5: ascii fallback + verbose interleave ------------------------------------------
+
+
+def test_ascii_flag_switches_the_glyph_set(reset_ui_state: None) -> None:
+    configure(UIState(ascii_only=True))
+    glyph_set = _ui.glyphs()
+    assert glyph_set.done == "[ok]"
+    assert glyph_set.spinner == "simpleDots"
+
+
+def test_ascii_success_and_error_lines(reset_ui_state: None) -> None:
+    configure(UIState(ascii_only=True))
+    console, buffer = _plain_console()
+    _ui.success("host devbox is up", "0:12", console=console)
+    render_error(BilletError("boom"), console)
+    output = buffer.getvalue()
+    assert "[ok] host devbox is up - 0:12" in output
+    assert "[x] boom" in output
+    assert "✓" not in output and "✗" not in output
+
+
+def test_ascii_banner_uses_hash_rack(reset_ui_state: None) -> None:
+    configure(UIState(ascii_only=True))
+    console = _terminal_console()
+    _ui.banner("0.4.0", console=console)
+    text = console.export_text()
+    assert "## ..   billet 0.4.0" in text
+    assert "█" not in text
+
+
+def test_ascii_checklist_piped_completion_lines(reset_ui_state: None) -> None:
+    configure(UIState(ascii_only=True))
+    buffer = io.StringIO()
+    console = Console(theme=BILLET_THEME, file=buffer, force_terminal=False, width=200)
+    checklist = PhaseChecklist(_checklist_phases(), title="t", console=console)
+    with checklist:
+        checklist.step_started(_START)
+        checklist.step_succeeded(_START)
+    assert "start vm gswa-devbox … ok" in buffer.getvalue()
+
+
+def test_verbose_checklist_prints_phase_headers_and_raw_lines(reset_ui_state: None) -> None:
+    configure(UIState(verbose=True))
+    console = _terminal_console()
+    phases = [
+        _ui.Phase(
+            key=_ui.COMPOSE_UP_KEY, label="docker compose up · build", group="workspace", bar=True
+        )
+    ]
+    checklist = PhaseChecklist(phases, title="posting api → devbox", console=console)
+    feed = checklist.compose_tail()
+    with checklist:
+        checklist.step_started(_COMPOSE)
+        feed("#9 [build 5/9] COPY requirements.txt .")
+        checklist.step_succeeded(_COMPOSE)
+    text = console.export_text()
+    assert "» docker compose up · build" in text  # the per-phase header
+    assert "#9 [build 5/9] COPY requirements.txt ." in text  # raw output interleaved
+    assert "docker compose up · build … ok" in text  # plain completion line (no Live)
+    assert phases[0].progress is None  # -v streams raw; the bar is not driven
+
+
+def test_quiet_suppresses_hint_lines(reset_ui_state: None) -> None:
+    configure(UIState(quiet=True))
+    console, buffer = _plain_console()
+    _ui.next_hint("billet ssh-config", console=console)
+    _ui.hint("start it", "billet start api", console=console)
+    assert buffer.getvalue() == ""
+    _ui.info("aborted — no changes made", console=console)  # outcomes still print
+    assert "aborted" in buffer.getvalue()
+
+
+def test_render_ls_json_is_machine_readable() -> None:
+    console, buffer = _plain_console()
+    _ui.render_ls_json(_ls_groups(), console=console)
+    records = json.loads(buffer.getvalue())
+    assert records == [
+        {"host": "devbox", "key": "api", "state": "running", "alias": "api.devbox", "port": 2222},
+        {"host": "devbox", "key": "web", "state": "stopped", "alias": "web.devbox", "port": 2224},
+    ]

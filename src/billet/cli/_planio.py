@@ -66,7 +66,7 @@ def should_apply(plan: Plan, *, gate: Gate) -> bool:
         render_plan(plan)
         detail = f" ({gate.vm_size.lower()})" if gate.vm_size else ""
         _ui.caution(f"this creates a billable vm{detail}")
-        if not typer.confirm(f"{_ui.GLYPH_PROMPT} proceed?"):
+        if not typer.confirm(f"{_ui.glyphs().prompt} proceed?"):
             _ui.info("aborted — no changes made")
             raise typer.Exit(1)
     return True

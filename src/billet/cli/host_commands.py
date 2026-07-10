@@ -45,17 +45,17 @@ metrics_factory: MetricsFactory = _default_metrics_factory
 
 
 _HostOption = Annotated[
-    str | None, typer.Option("--host", help="Host key (default: [billet].default_host).")
+    str | None, typer.Option("--host", help="host key (default: [billet].default_host).")
 ]
 _ConfigOption = Annotated[
     Path | None,
-    typer.Option("--config", help="Path to config.toml (default: XDG / $BILLET_CONFIG)."),
+    typer.Option("--config", help="path to config.toml (default: XDG / $BILLET_CONFIG)."),
 ]
 _DryRunOption = Annotated[
-    bool, typer.Option("--dry-run", help="Show the plan without making any changes.")
+    bool, typer.Option("--dry-run", help="show the plan without making any changes.")
 ]
 _YesOption = Annotated[
-    bool, typer.Option("--yes", "-y", help="Skip the billable-create confirmation.")
+    bool, typer.Option("--yes", "-y", help="skip the billable-create confirmation.")
 ]
 
 

@@ -31,9 +31,14 @@ def root(
         bool, typer.Option("--quiet", "-q", help="print only outcomes and errors.")
     ] = False,
     no_color: Annotated[bool, typer.Option("--no-color", help="disable color output.")] = False,
+    ascii_only: Annotated[
+        bool, typer.Option("--ascii", help="ascii glyphs only (no box/braille characters).")
+    ] = False,
 ) -> None:
     """Manage cloud Hosts and the repos' devcontainer Workspaces that run on them."""
-    _ui.configure(_ui.UIState(quiet=quiet, verbose=verbose, no_color=no_color))
+    _ui.configure(
+        _ui.UIState(quiet=quiet, verbose=verbose, no_color=no_color, ascii_only=ascii_only)
+    )
     if ctx.invoked_subcommand is None:
         # Bare `billet` is the signature moment: the berth-rack banner + command surface
         # (`billet version` stays a bare version string — scripts parse it).

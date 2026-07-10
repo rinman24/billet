@@ -87,18 +87,21 @@ def _execvp(argv: list[str]) -> NoReturn:
 
 _ConfigOption = Annotated[
     Path | None,
-    typer.Option("--config", help="Path to config.toml (default: XDG / $BILLET_CONFIG)."),
+    typer.Option("--config", help="path to config.toml (default: XDG / $BILLET_CONFIG)."),
 ]
 _DryRunOption = Annotated[
-    bool, typer.Option("--dry-run", help="Show the plan without making any changes.")
+    bool, typer.Option("--dry-run", help="show the plan without making any changes.")
 ]
 _YesOption = Annotated[
-    bool, typer.Option("--yes", "-y", help="Skip the billable-create confirmation.")
+    bool, typer.Option("--yes", "-y", help="skip the billable-create confirmation.")
 ]
 _VerifyOption = Annotated[
-    bool, typer.Option("--verify", help="Run the verify command in the container after bootstrap.")
+    bool, typer.Option("--verify", help="run the verify command in the container after bootstrap.")
 ]
-_KeyArgument = Annotated[str, typer.Argument(help="Workspace key (a [workspaces.<key>] table).")]
+_JsonOption = Annotated[
+    bool, typer.Option("--json", help="emit machine-readable json (one record per workspace).")
+]
+_KeyArgument = Annotated[str, typer.Argument(help="workspace key (a [workspaces.<key>] table).")]
 
 
 def _registry(config: Path | None) -> RegistryAccess:
@@ -140,13 +143,16 @@ def add(key: _KeyArgument, config: _ConfigOption = None) -> None:
 # --- ls ----------------------------------------------------------------------------
 
 
-def ls(config: _ConfigOption = None) -> None:
+def ls(config: _ConfigOption = None, as_json: _JsonOption = False) -> None:
     """List registered Workspaces and whether each container is running."""
     try:
         registry = _registry(config)
         manager = workspace_manager_factory()
         workspaces = [registry.workspace(k) for k in registry.workspace_keys()]
         if not workspaces:
+            if as_json:
+                _ui.render_ls_json([])
+                return
             _ui.empty_state(
                 (
                     "no workspaces yet.",
@@ -167,7 +173,10 @@ def ls(config: _ConfigOption = None) -> None:
             _ls_group(registry.host(host_key), workspaces, statuses)
             for host_key in registry.host_keys()
         ]
-        _ui.render_ls(groups)
+        if as_json:
+            _ui.render_ls_json(groups)
+        else:
+            _ui.render_ls(groups)
     except BilletError as exc:
         _planio.fail(exc)
 
@@ -311,15 +320,18 @@ def stop(key: _KeyArgument, config: _ConfigOption = None, dry_run: _DryRunOption
 def connect(key: _KeyArgument, config: _ConfigOption = None) -> None:
     """SSH into the Workspace container and attach to its tmux session."""
     try:
-        registry = _registry(config)
-        ws = registry.workspace(key)
-        host = registry.host(ws.host)
-        manager = workspace_manager_factory()
-        manager.assert_placement(host)  # ADR-0004: refuse a manages_workspaces=false host
-        facts = manager.read_facts(ws, _remote_via_alias(host, ws))
-        argv = manager.connect_target(ws, facts)
+        with _ui.planning_status(text="connecting…"):
+            registry = _registry(config)
+            ws = registry.workspace(key)
+            host = registry.host(ws.host)
+            manager = workspace_manager_factory()
+            manager.assert_placement(host)  # ADR-0004: refuse a manages_workspaces=false host
+            facts = manager.read_facts(ws, _remote_via_alias(host, ws))
+            argv = manager.connect_target(ws, facts)
     except BilletError as exc:
         _planio.fail(exc)
+    # All UI must precede the exec — billet is replaced by ssh and never prints again.
+    _ui.hint(f"connecting to {key}", f"tmux {ws.tmux_session}")
     _execvp(argv)
 
 

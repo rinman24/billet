@@ -9,6 +9,7 @@ terse, lowercase, present tense, no exclamation; status is a color, then a word.
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+import json
 import re
 import time
 from types import TracebackType
@@ -60,18 +61,65 @@ BILLET_THEME = Theme(
     }
 )
 
-# The 1-cell gutter glyphs every billet line leads with (the identity the old `[billet]`
-# prefix carried). The spinner glyph is rich's `dots` spinner, not a constant.
-GLYPH_DONE = "✓"
-GLYPH_PENDING = "○"
-GLYPH_STATE = "●"
-GLYPH_PROMPT = "❯"
-GLYPH_INFO = "·"
-GLYPH_CAUTION = "!"
-GLYPH_ERROR = "✗"
-GLYPH_TOTAL = "↳"
-BERTH_POSTED = "██"
-BERTH_OPEN = "░░"
+
+@dataclass(frozen=True, slots=True)
+class GlyphSet:
+    """The gutter glyph vocabulary every billet line leads with (§3).
+
+    The glyphs carry the identity the old ``[billet]`` prefix did. ``spinner`` names a
+    rich spinner. The ascii set is the §3 fallback table for terminals that cannot
+    render box/braille characters (or ``--ascii``).
+    """
+
+    done: str
+    pending: str
+    state: str
+    prompt: str
+    info: str
+    caution: str
+    error: str
+    total: str
+    header: str
+    berth_posted: str
+    berth_open: str
+    cell_posted: str
+    cell_open: str
+    spinner: str
+
+
+_UNICODE_GLYPHS = GlyphSet(
+    done="✓",
+    pending="○",
+    state="●",
+    prompt="❯",
+    info="·",
+    caution="!",
+    error="✗",
+    total="↳",
+    header="»",
+    berth_posted="██",
+    berth_open="░░",
+    cell_posted="█",
+    cell_open="░",
+    spinner="dots",
+)
+
+_ASCII_GLYPHS = GlyphSet(
+    done="[ok]",
+    pending="[ ]",
+    state="*",
+    prompt=">",
+    info="-",
+    caution="[!]",
+    error="[x]",
+    total=">",
+    header=">>",
+    berth_posted="##",
+    berth_open="..",
+    cell_posted="#",
+    cell_open=".",
+    spinner="simpleDots",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +129,7 @@ class UIState:
     quiet: bool = False
     verbose: bool = False
     no_color: bool = False
+    ascii_only: bool = False
 
 
 def _build_console(state: UIState, *, stderr: bool = False) -> Console:
@@ -143,6 +192,19 @@ def animate() -> bool:
     return _runtime.console.is_terminal and not _runtime.state.quiet
 
 
+def glyphs() -> GlyphSet:
+    """Return the active glyph set: unicode, or the §3 ascii fallback.
+
+    Falls back on ``--ascii``, or when the shared console's output encoding cannot
+    carry the box/braille glyphs (e.g. a C-locale pipe).
+    """
+    if _runtime.state.ascii_only:
+        return _ASCII_GLYPHS
+    if "utf" not in (_runtime.console.encoding or "").lower():
+        return _ASCII_GLYPHS
+    return _UNICODE_GLYPHS
+
+
 # --- error view ------------------------------------------------------------------------
 
 _STDERR_TAIL_LINES = 5
@@ -156,7 +218,7 @@ def render_error(exc: BilletError, console: Console | None = None) -> None:
     """
     err = console if console is not None else get_error_console()
     headline, remediation = _error_view(exc)
-    err.print(Text(f"{GLYPH_ERROR} {headline}", style="error"), soft_wrap=True)
+    err.print(Text(f"{glyphs().error} {headline}", style="error"), soft_wrap=True)
     if remediation is not None:
         err.print()
         err.print(remediation, soft_wrap=True)
@@ -210,29 +272,34 @@ def _process_error_view(exc: ProcessError) -> tuple[str, Group]:
 def info(message: str, console: Console | None = None) -> None:
     """Print an info line: the muted ``·`` gutter plus a muted message."""
     out = console if console is not None else get_console()
-    out.print(Text(f"{GLYPH_INFO} {message}", style="meta"), soft_wrap=True)
+    out.print(Text(f"{glyphs().info} {message}", style="meta"), soft_wrap=True)
 
 
 def success(message: str, detail: str | None = None, console: Console | None = None) -> None:
     """Print an outcome line: mint ``✓``, message in ink, optional ``· detail`` muted."""
     out = console if console is not None else get_console()
-    line = Text.assemble((GLYPH_DONE, "done"), " ", message)
+    line = Text.assemble((glyphs().done, "done"), " ", message)
     if detail:
-        line.append(f" {GLYPH_INFO} {detail}", style="meta")
+        line.append(f" {glyphs().info} {detail}", style="meta")
     out.print(line, soft_wrap=True)
 
 
 def caution(message: str, console: Console | None = None) -> None:
     """Print a caution line: amber ``!`` gutter plus the message in ink."""
     out = console if console is not None else get_console()
-    out.print(Text.assemble((GLYPH_CAUTION, "caution"), " ", message), soft_wrap=True)
+    out.print(Text.assemble((glyphs().caution, "caution"), " ", message), soft_wrap=True)
 
 
 def next_hint(*commands: str, console: Console | None = None) -> None:
-    """Print the ``· next`` line — the follow-up commands in ink, connectors muted."""
+    """Print the ``· next`` line — the follow-up commands in ink, connectors muted.
+
+    An info line, so ``--quiet`` suppresses it (outcome lines still print).
+    """
+    if get_state().quiet:
+        return
     out = console if console is not None else get_console()
     line = Text()  # no base style: appended commands must stay ink
-    line.append(f"{GLYPH_INFO} next  ", style="meta")
+    line.append(f"{glyphs().info} next  ", style="meta")
     for index, command in enumerate(commands):
         if index:
             line.append("  then  ", style="meta")
@@ -241,10 +308,15 @@ def next_hint(*commands: str, console: Console | None = None) -> None:
 
 
 def hint(label: str, command: str, console: Console | None = None) -> None:
-    """Print ``· {label} → {command}`` with the command in ink (copy-pasteable)."""
+    """Print ``· {label} → {command}`` with the command in ink (copy-pasteable).
+
+    An info line, so ``--quiet`` suppresses it (outcome lines still print).
+    """
+    if get_state().quiet:
+        return
     out = console if console is not None else get_console()
     line = Text()  # no base style: the appended command must stay ink
-    line.append(f"{GLYPH_INFO} {label} → ", style="meta")
+    line.append(f"{glyphs().info} {label} → ", style="meta")
     line.append(command)
     out.print(line, soft_wrap=True)
 
@@ -264,17 +336,18 @@ def banner(version: str, console: Console | None = None) -> None:
     if not out.is_terminal or get_state().quiet:
         out.print(f"billet {version}")
         return
+    g = glyphs()
     out.print(
         Text.assemble(
-            (BERTH_POSTED, "running"), " ", (BERTH_OPEN, "open"), "   ", f"billet {version}"
+            (g.berth_posted, "running"), " ", (g.berth_open, "open"), "   ", f"billet {version}"
         )
     )
     out.print(
         Text.assemble(
-            (BERTH_OPEN, "open"), " ", (BERTH_POSTED, "building"), "   ", (_TAGLINE, "meta")
+            (g.berth_open, "open"), " ", (g.berth_posted, "building"), "   ", (_TAGLINE, "meta")
         )
     )
-    out.print(Text.assemble((BERTH_POSTED, "running"), " ", (BERTH_OPEN, "open")))
+    out.print(Text.assemble((g.berth_posted, "running"), " ", (g.berth_open, "open")))
 
 
 _COMMAND_SURFACE: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
@@ -311,7 +384,7 @@ def command_surface(console: Console | None = None) -> None:
     out.print(Text.assemble(("usage", "meta"), "  billet <command> [args]"))
     out.print()
     for group, tagline, commands in _COMMAND_SURFACE:
-        out.print(Text.assemble((group, "heading"), (f" {GLYPH_INFO} {tagline}", "meta")))
+        out.print(Text.assemble((group, "heading"), (f" {glyphs().info} {tagline}", "meta")))
         for command, description in commands:
             out.print(Text.assemble(f"  {command:<16}", (description, "meta")))
     out.print()
@@ -351,9 +424,9 @@ def _workspace_plan_mode(steps: Sequence[WorkspacePlanStep]) -> str:
 def _plan_header(noun: str, key: str, mode: str) -> Text:
     return Text.assemble(
         ("plan", "heading"),
-        (f" {GLYPH_INFO} ", "meta"),
+        (f" {glyphs().info} ", "meta"),
         f"{noun} {key}",
-        (f" {GLYPH_INFO} ", "meta"),
+        (f" {glyphs().info} ", "meta"),
         (mode, "running"),
     )
 
@@ -380,7 +453,7 @@ def render_host_plan(
     grid.add_column()
     grid.add_column(justify="right")
     for number, step in enumerate(plan.steps, 1):
-        tag = Text(f"{GLYPH_CAUTION} billable", style="caution") if step.billable else Text("")
+        tag = Text(f"{glyphs().caution} billable", style="caution") if step.billable else Text("")
         grid.add_row(str(number), _plan_row_summary(step), tag)
     out.print(Padding(grid, (0, 0, 0, 2)))
 
@@ -423,12 +496,16 @@ class LsHostGroup:
     rows: tuple[LsWorkspaceRow, ...]
 
 
-_LS_STATE_GLYPHS: dict[str, tuple[str, str]] = {
-    "running": (GLYPH_STATE, "running"),
-    "stopped": (GLYPH_PENDING, "meta"),
-    "invalid": (GLYPH_STATE, "error"),
-    "unreachable": (GLYPH_PENDING, "caution"),
-}
+def _ls_state_glyph(state: str) -> tuple[str, str]:
+    g = glyphs()
+    table: dict[str, tuple[str, str]] = {
+        "running": (g.state, "running"),
+        "stopped": (g.pending, "meta"),
+        "invalid": (g.state, "error"),
+        "unreachable": (g.pending, "caution"),
+    }
+    return table[state]
+
 
 # The brand rack has six berths; the glyph is a visual metaphor, not a quota, so the
 # total simply grows past six if an operator posts more workspaces than the mark holds.
@@ -436,23 +513,24 @@ _RACK_BERTHS = 6
 
 
 def _rack_cells(posted: int) -> Text:
+    g = glyphs()
     total: int = max(_RACK_BERTHS, posted)
     cells = Text()
     for berth in range(total):
         if berth < posted:
-            cells.append("█", style="running" if berth % 2 == 0 else "building")
+            cells.append(g.cell_posted, style="running" if berth % 2 == 0 else "building")
         else:
-            cells.append("░", style="open")
+            cells.append(g.cell_open, style="open")
     return cells
 
 
 def _ls_host_line(group: LsHostGroup) -> Text:
     line = Text.assemble((group.key, "heading"), "   ", (group.vm_size.lower(), "meta"))
     if not group.manages_workspaces:
-        line.append(f" {GLYPH_INFO} manages no workspaces", style="dim")
+        line.append(f" {glyphs().info} manages no workspaces", style="dim")
         return line
     posted: int = len(group.rows)
-    line.append(f" {GLYPH_INFO} ", style="meta")
+    line.append(f" {glyphs().info} ", style="meta")
     line.append_text(_rack_cells(posted))
     line.append(f"  {posted} / {max(_RACK_BERTHS, posted)}", style="meta")
     return line
@@ -460,7 +538,7 @@ def _ls_host_line(group: LsHostGroup) -> Text:
 
 def _ls_unreachable_hint(host_key: str) -> Text:
     line = Text()  # no base style: the appended command must stay ink
-    line.append(f"{GLYPH_INFO} host {host_key} is unreachable — bring it up with ", style="meta")
+    line.append(f"{glyphs().info} host {host_key} is unreachable — bring it up with ", style="meta")
     line.append(f"billet host up --host {host_key}")
     return line
 
@@ -483,7 +561,7 @@ def render_ls(groups: Sequence[LsHostGroup], console: Console | None = None) -> 
             grid.add_column()
             grid.add_column()
             for row in group.rows:
-                glyph, style = _LS_STATE_GLYPHS[row.state]
+                glyph, style = _ls_state_glyph(row.state)
                 grid.add_row(
                     Text(glyph, style=style),
                     row.key,
@@ -516,6 +594,23 @@ def _render_ls_plain(groups: Sequence[LsHostGroup], out: Console) -> None:
             out.print(_ls_unreachable_hint(group.key), soft_wrap=True)
 
 
+def render_ls_json(groups: Sequence[LsHostGroup], console: Console | None = None) -> None:
+    """Emit ls as one machine-readable JSON array — no styling, one record per workspace."""
+    records: list[dict[str, str | int]] = [
+        {
+            "host": group.key,
+            "key": row.key,
+            "state": row.state,
+            "alias": row.alias,
+            "port": row.port,
+        }
+        for group in groups
+        for row in group.rows
+    ]
+    out = console if console is not None else get_console()
+    out.print(Text(json.dumps(records)), soft_wrap=True)
+
+
 # --- empty state (§6.7) ----------------------------------------------------------------
 
 
@@ -526,7 +621,7 @@ def empty_state(lines: Sequence[str], console: Console | None = None) -> None:
         for line in lines:
             out.print(Text(line), soft_wrap=True)
         return
-    rack: str = f"{BERTH_OPEN} {BERTH_OPEN}"
+    rack: str = f"{glyphs().berth_open} {glyphs().berth_open}"
     for index in range(max(3, len(lines))):
         text: str = lines[index] if index < len(lines) else ""
         style: str = "" if index == 0 else "meta"
@@ -676,11 +771,15 @@ def workspace_phases(plan: WorkspacePlan, spec: WorkspaceSpec) -> list[Phase]:
     ]
 
 
-_PHASE_GUTTER: dict[str, tuple[str, str]] = {
-    "pending": (GLYPH_PENDING, "open"),
-    "done": (GLYPH_DONE, "done"),
-    "failed": (GLYPH_ERROR, "error"),
-}
+def _phase_gutter(state: str) -> tuple[str, str]:
+    g = glyphs()
+    table: dict[str, tuple[str, str]] = {
+        "pending": (g.pending, "open"),
+        "done": (g.done, "done"),
+        "failed": (g.error, "error"),
+    }
+    return table[state]
+
 
 _BAR_CELLS = 24
 
@@ -726,8 +825,10 @@ class PhaseChecklist:
         self._by_key: dict[str, Phase] = {phase.key: phase for phase in self._phases}
         self._title = title
         self._quiet: bool = get_state().quiet
-        self._animate: bool = self._console.is_terminal and not self._quiet
-        self._spinner = Spinner("dots", style="building")
+        self._verbose: bool = get_state().verbose
+        # -v swaps the animated checklist for plain per-phase headers + raw output (§7.1).
+        self._animate: bool = self._console.is_terminal and not self._quiet and not self._verbose
+        self._spinner = Spinner(glyphs().spinner, style="building")
         self._live: Live | None = None
 
     def __enter__(self) -> Self:
@@ -757,6 +858,10 @@ class PhaseChecklist:
             return  # unknown step: ignore rather than corrupt the checklist
         phase.state = "active"
         phase.t0 = time.monotonic()
+        if self._verbose and not self._quiet:
+            self._console.print(
+                Text(f"{glyphs().header} {phase.label}", style="meta"), soft_wrap=True
+            )
 
     def step_succeeded(self, step: PlanStep | WorkspacePlanStep) -> None:
         """Mark the step's phase done, freezing its elapsed."""
@@ -800,21 +905,36 @@ class PhaseChecklist:
     def _gutter(self, phase: Phase) -> Spinner | Text:
         if phase.state == "active":
             return self._spinner
-        glyph, style = _PHASE_GUTTER[phase.state]
+        glyph, style = _phase_gutter(phase.state)
         return Text(glyph, style=style)
 
-    def _bar(self, phase: Phase) -> ProgressBar:
+    def _bar(self, phase: Phase) -> ProgressBar | Text:
+        g = glyphs()
+        if g is _ASCII_GLYPHS:
+            # Hand-rolled cells: rich's bar glyphs are box-drawing characters.
+            filled: int = round((phase.progress or 0.0) * _BAR_CELLS)
+            bar = Text(g.cell_posted * filled, style="building")
+            bar.append(g.cell_open * (_BAR_CELLS - filled), style="meta")
+            return bar
         if phase.progress is not None:
             return ProgressBar(
                 total=1.0, completed=phase.progress, width=_BAR_CELLS, complete_style="building"
             )
         return ProgressBar(pulse=True, width=_BAR_CELLS, pulse_style="building")
 
-    def _rows(self, phases: Sequence[Phase]) -> Group:
+    @staticmethod
+    def _row_grid() -> Table:
+        # Gutter width tracks the glyph set: 1 cell for unicode, wider for ascii tags.
+        g = glyphs()
+        gutter: int = max(len(g.done), len(g.pending), len(g.error)) + 2
         grid = Table.grid(expand=True, padding=(0, 1))
-        grid.add_column(width=3, justify="right")
+        grid.add_column(width=gutter, justify="right")
         grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
         grid.add_column(width=6, justify="right")
+        return grid
+
+    def _rows(self, phases: Sequence[Phase]) -> Group:
+        grid = self._row_grid()
         renderables: list[Table | Padding] = [grid]
         for phase in phases:
             label_style = "dim" if phase.state == "pending" else ""
@@ -825,10 +945,7 @@ class PhaseChecklist:
                 if phase.last_line:
                     tail = Text(phase.last_line, style="dim", overflow="ellipsis", no_wrap=True)
                     renderables.append(Padding(tail, (0, 0, 0, 6)))
-                grid = Table.grid(expand=True, padding=(0, 1))
-                grid.add_column(width=3, justify="right")
-                grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
-                grid.add_column(width=6, justify="right")
+                grid = self._row_grid()
                 renderables.append(grid)
         return Group(*renderables)
 
@@ -840,6 +957,10 @@ class PhaseChecklist:
         """
 
         def feed(line: str) -> None:
+            if self._verbose and not self._quiet:
+                # -v: the raw underlying output, interleaved below the phase header.
+                self._console.print(Text(f"  {line}", style="dim"), soft_wrap=True)
+                return
             self.log(COMPOSE_UP_KEY, line)
             fraction = buildkit_fraction(line)
             if fraction is not None:
@@ -854,7 +975,7 @@ class PhaseChecklist:
         header.add_column(justify="right")
         header.add_row(
             Text(self._title),
-            Text(f"{GLYPH_TOTAL} {self.total_elapsed()}", style="dim"),
+            Text(f"{glyphs().total} {self.total_elapsed()}", style="dim"),
         )
         renderables: list[RenderableType] = [header]
         groups: list[str] = []
@@ -871,8 +992,8 @@ class PhaseChecklist:
 
 
 @contextmanager
-def planning_status(console: Console | None = None) -> Generator[None]:
-    """Show a planning spinner for the pre-plan phase (silent when not a terminal).
+def planning_status(console: Console | None = None, text: str = "planning…") -> Generator[None]:
+    """Show a transient status spinner (silent when not a terminal).
 
     Wrap plan construction (registry reads plus the provider's ``az`` round-trips) in
     this so the operator sees activity before the plan renders. The first frame paints
@@ -884,7 +1005,7 @@ def planning_status(console: Console | None = None) -> Generator[None]:
     if not active.is_terminal:
         yield
         return
-    spinner = Spinner("dots", text=Text("planning…", style="meta"), style="building")
+    spinner = Spinner(glyphs().spinner, text=Text(text, style="meta"), style="building")
     live = Live(spinner, console=active, refresh_per_second=12.5, transient=True)
     live.start(refresh=True)
     try:

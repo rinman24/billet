@@ -5,6 +5,7 @@ the full command path (config parse -> host plan/gate -> workspace plan/apply) w
 invoking ``az`` / ``ssh`` / ``os.execvp``.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -408,3 +409,36 @@ def test_ls_annotates_a_non_managing_host_but_still_lists_the_rest(
     assert "running" in backend  # the managing-host workspace still probed
     on_fleet = next(ln for ln in rows if "on-fleet" in ln)
     assert "invalid" in on_fleet  # the fleet-host workspace flagged, not probed
+
+
+def test_ls_json_emits_machine_readable_records(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    _install(monkeypatch, container=FakeContainerAccess(running=True))
+    result = runner.invoke(app, ["ls", "--config", str(config_file), "--json"])
+    assert result.exit_code == 0
+    records = json.loads(result.stdout)
+    assert records == [
+        {
+            "host": "devbox",
+            "key": "gswa-backend",
+            "state": "running",
+            "alias": "gswa-container",
+            "port": 2222,
+        }
+    ]
+
+
+def test_connect_prints_status_before_exec(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    _install(monkeypatch)
+
+    def _no_exec(argv: list[str]) -> None:
+        return None
+
+    monkeypatch.setattr(wc, "_execvp", _no_exec)
+    result = runner.invoke(app, ["connect", "gswa-backend", "--config", str(config_file)])
+    assert result.exit_code == 0
+    assert "connecting to gswa-backend" in result.output
+    assert "tmux main" in result.output
