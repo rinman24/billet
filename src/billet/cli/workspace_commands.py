@@ -210,28 +210,31 @@ def start(
             _ui.info("dry-run — no changes made")
             return
 
-        # Host phase — the billable cold-create gate fires here, at the client.
-        _planio.run_plan(
-            host_plan,
-            dry_run=False,
-            yes=yes,
-            apply=lambda obs: host_manager.apply(host_plan, host, obs),
-            copy=_planio.GateCopy(vm_size=host.vm_size),
+        # The billable cold-create gate fires here, at the client, before any Live display.
+        apply_host = _planio.should_apply(
+            host_plan, gate=_planio.Gate(yes=yes, vm_size=host.vm_size)
         )
-        remote = _resolve_running_remote(provider, host)
 
-        # Workspace phase.
-        _planio.run_workspace_plan(
-            ws_plan,
-            apply=lambda obs: manager.apply_start(
+        # One checklist carries the whole posting arc: host phases, then workspace phases.
+        checklist = _ui.PhaseChecklist(
+            [
+                *(_ui.host_phases(host_plan, host) if apply_host else []),
+                *_ui.workspace_phases(ws_plan, ws),
+            ],
+            title=f"posting {key} → {ws.host}",
+        )
+        with checklist as observer:
+            if apply_host:
+                host_manager.apply(host_plan, host, observer)
+            remote = _resolve_running_remote(provider, host)
+            manager.apply_start(
                 ws_plan,
                 ws,
                 remote,
                 personal_bootstrap_cmd=global_config.personal_bootstrap_cmd,
-                observer=obs,
-            ),
-        )
-        _ui.success(f"workspace {key} is up")
+                observer=observer,
+            )
+        _ui.success(f"workspace {key} is up", checklist.total_elapsed())
         _ui.next_hint("billet ssh-config", f"billet connect {key}")
     except BilletError as exc:
         _planio.fail(exc)
@@ -264,7 +267,11 @@ def stop(key: _KeyArgument, config: _ConfigOption = None, dry_run: _DryRunOption
             _ui.info("dry-run — no changes made")
             return
         _planio.run_workspace_plan(
-            plan, apply=lambda obs: manager.apply_stop(plan, ws, _remote_via_alias(host, ws), obs)
+            plan,
+            apply=lambda obs: manager.apply_stop(plan, ws, _remote_via_alias(host, ws), obs),
+            checklist=_ui.PhaseChecklist(
+                _ui.workspace_phases(plan, ws), title=f"stop · workspace {key}"
+            ),
         )
         _ui.success(f"workspace {key} stopped", "data persists")
     except BilletError as exc:

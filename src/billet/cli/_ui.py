@@ -9,26 +9,29 @@ terse, lowercase, present tense, no exclamation; status is a color, then a word.
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from enum import Enum
 import re
+import time
 from types import TracebackType
 from typing import Self
 
-from rich.console import Console, Group
+from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.padding import Padding
 from rich.panel import Panel
+from rich.progress_bar import ProgressBar
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
 from billet.contracts import (
+    HostSpec,
     Plan,
     PlanStep,
     StepKind,
     WorkspacePlan,
     WorkspacePlanStep,
+    WorkspaceSpec,
     WorkspaceStepKind,
 )
 from billet.shared.errors import (
@@ -54,11 +57,6 @@ BILLET_THEME = Theme(
         "meta": "#837390",
         "open": "#9C8BB2",
         "heading": "bold",
-        # Legacy plan-renderer styles; retired with PlanRenderer once PhaseChecklist lands.
-        "billet.pending": "#3FD2BE",
-        "billet.running": "bold #C05CE0",
-        "billet.ok": "bold #22C55E",
-        "billet.failed": "bold #EF4444",
     }
 )
 
@@ -233,7 +231,8 @@ def caution(message: str, console: Console | None = None) -> None:
 def next_hint(*commands: str, console: Console | None = None) -> None:
     """Print the ``· next`` line — the follow-up commands in ink, connectors muted."""
     out = console if console is not None else get_console()
-    line = Text(f"{GLYPH_INFO} next  ", style="meta")
+    line = Text()  # no base style: appended commands must stay ink
+    line.append(f"{GLYPH_INFO} next  ", style="meta")
     for index, command in enumerate(commands):
         if index:
             line.append("  then  ", style="meta")
@@ -244,7 +243,8 @@ def next_hint(*commands: str, console: Console | None = None) -> None:
 def hint(label: str, command: str, console: Console | None = None) -> None:
     """Print ``· {label} → {command}`` with the command in ink (copy-pasteable)."""
     out = console if console is not None else get_console()
-    line = Text(f"{GLYPH_INFO} {label} → ", style="meta")
+    line = Text()  # no base style: the appended command must stay ink
+    line.append(f"{GLYPH_INFO} {label} → ", style="meta")
     line.append(command)
     out.print(line, soft_wrap=True)
 
@@ -329,7 +329,8 @@ def _plan_row_summary(step: PlanStep | WorkspacePlanStep) -> str:
     return _BILLABLE_SHOUT.sub("", step.summary).lower()
 
 
-def _host_plan_mode(steps: Sequence[PlanStep]) -> str:
+def host_plan_mode(steps: Sequence[PlanStep]) -> str:
+    """Name the shape of a host plan from its step kinds (plan header, checklist title)."""
     kinds: set[StepKind] = {step.kind for step in steps}
     if StepKind.CREATE in kinds:
         return "cold create"
@@ -373,7 +374,7 @@ def render_host_plan(
     if plan.is_empty:
         nothing_to_do(plan.host_key, already, out)
         return
-    out.print(_plan_header("host", plan.host_key, _host_plan_mode(plan.steps)))
+    out.print(_plan_header("host", plan.host_key, host_plan_mode(plan.steps)))
     grid = Table.grid(padding=(0, 2))
     grid.add_column(justify="right", style="meta")
     grid.add_column()
@@ -458,7 +459,8 @@ def _ls_host_line(group: LsHostGroup) -> Text:
 
 
 def _ls_unreachable_hint(host_key: str) -> Text:
-    line = Text(f"{GLYPH_INFO} host {host_key} is unreachable — bring it up with ", style="meta")
+    line = Text()  # no base style: the appended command must stay ink
+    line.append(f"{GLYPH_INFO} host {host_key} is unreachable — bring it up with ", style="meta")
     line.append(f"billet host up --host {host_key}")
     return line
 
@@ -578,75 +580,140 @@ def titled_steps(
     out.print(Text(title, style="heading"))
     out.print(Text(f"  {note}", style="meta"))
     for number, (label, command) in enumerate(steps, 1):
-        line = Text(f"  {number}  ", style="meta")
-        line.append(label, style="meta")
+        line = Text()  # no base style: the appended command must stay ink
+        line.append(f"  {number}  {label}", style="meta")
         if command:
-            line.append("   ")
-            line.append(command)
+            line.append(f"   {command}")
         out.print(line, soft_wrap=True)
 
 
-# --- live plan progress (retired for PhaseChecklist in the live-checklist phase) --------
+# --- the live phase checklist (§6.2) ----------------------------------------------------
 
 
-class _StepState(Enum):
-    """Render state of one plan step in the checklist."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    OK = "ok"
-    FAILED = "failed"
+def _fmt_mss(seconds: float) -> str:
+    """Format elapsed seconds as ``M:SS`` (``0:47``, ``1:44``)."""
+    minutes, secs = divmod(int(seconds), 60)
+    return f"{minutes}:{secs:02d}"
 
 
-_PLAIN_PREFIX = {
-    _StepState.RUNNING: "…",
-    _StepState.OK: "✓",
-    _StepState.FAILED: "✗",
+def _repo_short(repo_url: str) -> str:
+    """Reduce a repo url to ``owner/name`` (works for scp-like and https forms)."""
+    tail: str = repo_url.rstrip("/").removesuffix(".git").replace(":", "/")
+    return "/".join(tail.split("/")[-2:])
+
+
+@dataclass
+class Phase:
+    """One row of the live checklist: a plan step with render state and timing."""
+
+    key: str
+    label: str
+    group: str = ""
+    bar: bool = False
+    state: str = "pending"  # pending | active | done | failed
+    t0: float | None = None
+    t1: float | None = None
+    progress: float | None = None
+    last_line: str = ""
+
+    def elapsed(self) -> float:
+        """Return the phase's elapsed seconds (live while active, frozen once ended)."""
+        if self.t0 is None:
+            return 0.0
+        end: float = self.t1 if self.t1 is not None else time.monotonic()
+        return end - self.t0
+
+
+def phase_key(step: PlanStep | WorkspacePlanStep) -> str:
+    """Return the checklist key a plan step maps to (host and workspace kinds differ)."""
+    group = "host" if isinstance(step, PlanStep) else "workspace"
+    return f"{group}:{step.kind.value}"
+
+
+def _host_phase_label(kind: StepKind, spec: HostSpec) -> str:
+    labels: dict[StepKind, str] = {
+        StepKind.CREATE: f"create vm {spec.vm_name}",
+        StepKind.ENSURE_TAGS: f"adopt vm {spec.vm_name}",
+        StepKind.PIN_INBOUND: "pin inbound ssh",
+        StepKind.START: f"start vm {spec.vm_name}",
+        StepKind.DEALLOCATE: f"deallocate vm {spec.vm_name}",
+        StepKind.WAIT_REACHABLE: "wait for ssh",
+        StepKind.ENSURE_SUPPLY_CHAIN: "install docker",
+    }
+    return labels[kind]
+
+
+def _workspace_phase_label(kind: WorkspaceStepKind, spec: WorkspaceSpec) -> str:
+    labels: dict[WorkspaceStepKind, str] = {
+        WorkspaceStepKind.ENSURE_SOURCE: f"clone / fetch {_repo_short(spec.repo_url)}",
+        WorkspaceStepKind.COMPOSE_UP: "docker compose up · build",
+        WorkspaceStepKind.POST_CREATE: "postCreate",
+        WorkspaceStepKind.PERSONAL_BOOTSTRAP: "personal bootstrap",
+        WorkspaceStepKind.VERIFY: "verify",
+        WorkspaceStepKind.COMPOSE_STOP: "stop compose stack",
+    }
+    return labels[kind]
+
+
+def host_phases(plan: Plan, spec: HostSpec) -> list[Phase]:
+    """Build checklist phases from a host plan (compact present-tense labels)."""
+    return [
+        Phase(key=phase_key(step), label=_host_phase_label(step.kind, spec), group="host")
+        for step in plan.steps
+    ]
+
+
+def workspace_phases(plan: WorkspacePlan, spec: WorkspaceSpec) -> list[Phase]:
+    """Build checklist phases from a workspace plan (compose-up carries the bar)."""
+    return [
+        Phase(
+            key=phase_key(step),
+            label=_workspace_phase_label(step.kind, spec),
+            group="workspace",
+            bar=step.kind is WorkspaceStepKind.COMPOSE_UP,
+        )
+        for step in plan.steps
+    ]
+
+
+_PHASE_GUTTER: dict[str, tuple[str, str]] = {
+    "pending": (GLYPH_PENDING, "open"),
+    "done": (GLYPH_DONE, "done"),
+    "failed": (GLYPH_ERROR, "error"),
 }
 
-_STATIC_GLYPHS = {
-    _StepState.PENDING: ("●", "billet.pending"),
-    _StepState.OK: ("✓", "billet.ok"),
-    _StepState.FAILED: ("✗", "billet.failed"),
-}
+_BAR_CELLS = 24
 
 
-def _line(step: PlanStep | WorkspacePlanStep, state: _StepState) -> Spinner | Text:
-    """Render one checklist line for ``step`` in ``state``."""
-    if state is _StepState.RUNNING:
-        text = Text(step.summary, style="billet.running")
-        return Spinner("dots", text=text, style="billet.running")
-    glyph, style = _STATIC_GLYPHS[state]
-    return Text(f"{glyph} {step.summary}", style=style)
+class PhaseChecklist:
+    """A live, in-place checklist that ticks phases as a manager applies a plan.
 
+    Implements the :class:`~billet.contracts.PlanObserver` protocol, so the CLI passes
+    it straight into ``apply``. On a tty (and not ``--quiet``) the rows render through
+    ``rich.live.Live``: ``○`` pending → mint dots spinner with a live elapsed while
+    active → ``✓`` with the frozen elapsed once done (``✗`` on failure); a ``bar``
+    phase shows a pulse bar (and, when fed, a log tail) while active. Piped / CI output
+    degrades to one plain completion line per phase; under ``--quiet`` the checklist is
+    silent and only the caller's outcome line prints.
 
-class PlanRenderer:
-    """Render a plan's steps as a live checklist while a manager applies it.
-
-    Implements the :class:`~billet.contracts.PlanObserver` protocol. On a terminal the
-    steps render through ``rich.live.Live`` — a dim ``●`` while pending, an animated
-    spinner while running, a green ``✓`` / red ``✗`` once done — each followed by the
-    step's summary. When stdout is not a terminal (CI, piped output) Live is skipped
-    entirely and each event degrades to one plain sequential line so logs stay readable.
-
-    Use as a context manager so the Live display is entered/exited around the apply.
+    Use as a context manager so the Live display wraps the apply calls.
     """
 
-    def __init__(
-        self,
-        steps: Sequence[PlanStep | WorkspacePlanStep],
-        console: Console | None = None,
-    ) -> None:
+    def __init__(self, phases: Sequence[Phase], title: str, console: Console | None = None) -> None:
         self._console = console if console is not None else get_console()
-        self._steps: list[PlanStep | WorkspacePlanStep] = list(steps)
-        self._states: list[_StepState] = [_StepState.PENDING] * len(self._steps)
+        self._phases: list[Phase] = list(phases)
+        self._by_key: dict[str, Phase] = {phase.key: phase for phase in self._phases}
+        self._title = title
+        self._quiet: bool = get_state().quiet
+        self._animate: bool = self._console.is_terminal and not self._quiet
+        self._spinner = Spinner("dots", style="building")
         self._live: Live | None = None
 
     def __enter__(self) -> Self:
-        """Start the Live checklist (terminal only) and return self as the observer."""
-        if self._console.is_terminal:
-            self._live = Live(self._checklist(), console=self._console, refresh_per_second=12.5)
-            self._live.start()
+        """Start the Live display (animated path only) and return self as the observer."""
+        if self._animate and self._phases:
+            self._live = Live(self, console=self._console, refresh_per_second=12.5, transient=False)
+            self._live.__enter__()
         return self
 
     def __exit__(
@@ -655,49 +722,116 @@ class PlanRenderer:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Stop the Live display, leaving the final checklist on screen."""
+        """Stop the Live display, leaving the finished checklist on screen."""
         if self._live is not None:
-            self._live.stop()
+            self._live.__exit__(exc_type, exc_value, traceback)
             self._live = None
 
-    # --- PlanObserver events ---------------------------------------------------------
+    # --- PlanObserver events -----------------------------------------------------------
 
     def step_started(self, step: PlanStep | WorkspacePlanStep) -> None:
-        """Mark the step as running (spinner / plain ``…`` line)."""
-        self._transition(step, _StepState.PENDING, _StepState.RUNNING)
+        """Mark the step's phase active and start its clock."""
+        phase = self._by_key.get(phase_key(step))
+        if phase is None:
+            return  # unknown step: ignore rather than corrupt the checklist
+        phase.state = "active"
+        phase.t0 = time.monotonic()
 
     def step_succeeded(self, step: PlanStep | WorkspacePlanStep) -> None:
-        """Mark the step as succeeded (green ``✓``)."""
-        self._transition(step, _StepState.RUNNING, _StepState.OK)
+        """Mark the step's phase done, freezing its elapsed."""
+        self._finish(step, "done")
 
     def step_failed(self, step: PlanStep | WorkspacePlanStep) -> None:
-        """Mark the step as failed (red ``✗``)."""
-        self._transition(step, _StepState.RUNNING, _StepState.FAILED)
+        """Mark the step's phase failed; the checklist stops with the ✗ row visible."""
+        self._finish(step, "failed")
 
-    # --- rendering ---------------------------------------------------------------------
+    def _finish(self, step: PlanStep | WorkspacePlanStep, state: str) -> None:
+        phase = self._by_key.get(phase_key(step))
+        if phase is None:
+            return
+        phase.state = state
+        phase.t1 = time.monotonic()
+        if not self._quiet and not self._animate:
+            word = "failed" if state == "failed" else "ok"
+            style = "error" if state == "failed" else ""
+            self._console.print(Text(f"  {phase.label} … {word}", style=style), soft_wrap=True)
 
-    def _transition(
-        self, step: PlanStep | WorkspacePlanStep, old: _StepState, new: _StepState
-    ) -> None:
-        for index, (candidate, state) in enumerate(zip(self._steps, self._states)):
-            if state is old and candidate == step:
-                self._states[index] = new
-                break
-        else:
-            return  # unknown step: ignore rather than corrupt the checklist
-        if self._live is not None:
-            self._live.update(self._checklist())
-        else:
-            self._print_plain(step, new)
+    # --- phase-4 seams (fed by the compose-up log stream) --------------------------------
 
-    def _checklist(self) -> Group:
-        return Group(*(_line(step, state) for step, state in zip(self._steps, self._states)))
+    def set_progress(self, key: str, fraction: float | None) -> None:
+        """Set a real 0..1 fraction for a bar phase (None reverts to the pulse bar)."""
+        phase = self._by_key.get(key)
+        if phase is not None:
+            phase.progress = fraction
 
-    def _print_plain(self, step: PlanStep | WorkspacePlanStep, state: _StepState) -> None:
-        # Text (not markup) so summaries containing brackets render verbatim; soft_wrap
-        # so one event stays one log line regardless of the (defaulted) console width.
-        line = Text(f"[billet] {_PLAIN_PREFIX[state]} {step.summary}")
-        self._console.print(line, soft_wrap=True)
+    def log(self, key: str, line: str) -> None:
+        """Show ``line`` as the live log tail under the phase's bar (animated only)."""
+        phase = self._by_key.get(key)
+        if phase is not None:
+            phase.last_line = line.strip()
+
+    # --- rendering -----------------------------------------------------------------------
+
+    def total_elapsed(self) -> str:
+        """Return the ``M:SS`` sum of elapsed time across all phases."""
+        return _fmt_mss(sum(phase.elapsed() for phase in self._phases))
+
+    def _gutter(self, phase: Phase) -> Spinner | Text:
+        if phase.state == "active":
+            return self._spinner
+        glyph, style = _PHASE_GUTTER[phase.state]
+        return Text(glyph, style=style)
+
+    def _bar(self, phase: Phase) -> ProgressBar:
+        if phase.progress is not None:
+            return ProgressBar(
+                total=1.0, completed=phase.progress, width=_BAR_CELLS, complete_style="building"
+            )
+        return ProgressBar(pulse=True, width=_BAR_CELLS, pulse_style="building")
+
+    def _rows(self, phases: Sequence[Phase]) -> Group:
+        grid = Table.grid(expand=True, padding=(0, 1))
+        grid.add_column(width=3, justify="right")
+        grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+        grid.add_column(width=6, justify="right")
+        renderables: list[Table | Padding] = [grid]
+        for phase in phases:
+            label_style = "dim" if phase.state == "pending" else ""
+            elapsed = Text(_fmt_mss(phase.elapsed()) if phase.t0 else "", style="meta")
+            grid.add_row(self._gutter(phase), Text(phase.label, style=label_style), elapsed)
+            if phase.bar and phase.state == "active":
+                renderables.append(Padding(self._bar(phase), (0, 0, 0, 6)))
+                if phase.last_line:
+                    tail = Text(phase.last_line, style="dim", overflow="ellipsis", no_wrap=True)
+                    renderables.append(Padding(tail, (0, 0, 0, 6)))
+                grid = Table.grid(expand=True, padding=(0, 1))
+                grid.add_column(width=3, justify="right")
+                grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+                grid.add_column(width=6, justify="right")
+                renderables.append(grid)
+        return Group(*renderables)
+
+    def __rich__(self) -> Group:
+        """Render the checklist frame: title + running total, group rules, phase rows."""
+        header = Table.grid(expand=True)
+        header.add_column()
+        header.add_column(justify="right")
+        header.add_row(
+            Text(self._title),
+            Text(f"{GLYPH_TOTAL} {self.total_elapsed()}", style="dim"),
+        )
+        renderables: list[RenderableType] = [header]
+        groups: list[str] = []
+        for phase in self._phases:
+            if phase.group not in groups:
+                groups.append(phase.group)
+        show_rules: bool = len([group for group in groups if group]) > 1
+        for group in groups:
+            members = [phase for phase in self._phases if phase.group == group]
+            if show_rules and group:
+                renderables.append(Text(group, style="dim"))
+            renderables.append(self._rows(members))
+        return Group(*renderables)
 
 
 @contextmanager

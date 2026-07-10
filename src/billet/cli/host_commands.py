@@ -81,15 +81,18 @@ def up(
         with planning_status():
             manager, spec, key, provider = _build(config, host)
             plan = manager.plan_up(spec)
+        checklist = _ui.PhaseChecklist(
+            _ui.host_phases(plan, spec), title=f"{_ui.host_plan_mode(plan.steps)} · host {key}"
+        )
         if _planio.run_plan(
             plan,
-            dry_run=dry_run,
-            yes=yes,
+            gate=_planio.Gate(dry_run=dry_run, yes=yes, vm_size=spec.vm_size),
             apply=lambda obs: manager.apply(plan, spec, obs),
-            copy=_planio.GateCopy(vm_size=spec.vm_size),
+            checklist=checklist,
         ):
             ip = provider.status(spec).public_ip
-            _ui.success(f"host {key} is up", ip)
+            detail = " · ".join(part for part in (ip, checklist.total_elapsed()) if part)
+            _ui.success(f"host {key} is up", detail)
     except BilletError as exc:
         _planio.fail(exc)
 
@@ -106,12 +109,14 @@ def stop(
         with planning_status():
             manager, spec, key, _provider = _build(config, host)
             plan = manager.plan_stop(spec)
+        checklist = _ui.PhaseChecklist(
+            _ui.host_phases(plan, spec), title=f"deallocate · host {key}"
+        )
         if _planio.run_plan(
             plan,
-            dry_run=dry_run,
-            yes=yes,
+            gate=_planio.Gate(dry_run=dry_run, yes=yes, already="deallocated"),
             apply=lambda obs: manager.apply(plan, spec, obs),
-            copy=_planio.GateCopy(already="deallocated"),
+            checklist=checklist,
         ):
             _ui.success(f"host {key} deallocated", "billing stopped")
     except BilletError as exc:
@@ -237,10 +242,14 @@ def pin_ip(
     """Re-pin the inbound SSH rule to your current egress IP/32 (no state change)."""
     try:
         with planning_status():
-            manager, spec, _key, _provider = _build(config, host)
+            manager, spec, key, _provider = _build(config, host)
             plan = manager.plan_pin_ip(spec)
+        checklist = _ui.PhaseChecklist(_ui.host_phases(plan, spec), title=f"pin · host {key}")
         if _planio.run_plan(
-            plan, dry_run=dry_run, yes=True, apply=lambda obs: manager.apply(plan, spec, obs)
+            plan,
+            gate=_planio.Gate(dry_run=dry_run, yes=True),
+            apply=lambda obs: manager.apply(plan, spec, obs),
+            checklist=checklist,
         ):
             _ui.success("inbound ssh re-pinned")
     except BilletError as exc:

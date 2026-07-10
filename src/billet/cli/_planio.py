@@ -18,14 +18,17 @@ from billet.shared.errors import BilletError
 
 
 @dataclass(frozen=True, slots=True)
-class GateCopy:
-    """Command-context copy for the plan gate.
+class Gate:
+    """Everything the plan gate needs beyond the plan itself.
 
-    ``vm_size`` names the size in the billable confirm preamble; ``already`` names the
-    state an empty plan leaves the host in (e.g. ``"deallocated"``) so the
-    nothing-to-do line can say so. Both are optional — omit what the caller cannot know.
+    ``dry_run`` / ``yes`` are the command flags. ``vm_size`` names the size in the
+    billable confirm preamble; ``already`` names the state an empty plan leaves the
+    host in (e.g. ``"deallocated"``) so the nothing-to-do line can say so. The last
+    two are optional — omit what the caller cannot know.
     """
 
+    dry_run: bool = False
+    yes: bool = False
     vm_size: str | None = None
     already: str | None = None
 
@@ -45,16 +48,22 @@ def render_plan(plan: Plan, already: str | None = None) -> None:
     _ui.render_host_plan(plan, already=already)
 
 
-def should_apply(plan: Plan, *, dry_run: bool, yes: bool, copy: GateCopy | None = None) -> bool:
-    """Render a host plan and decide whether to execute it (dry-run / billable confirm)."""
-    gate = copy if copy is not None else GateCopy()
-    render_plan(plan, already=gate.already)
-    if dry_run:
+def should_apply(plan: Plan, *, gate: Gate) -> bool:
+    """Decide whether to execute a host plan (dry-run / empty / billable confirm).
+
+    Per the review-then-watch arc (§7.1–7.2) the plan view renders only when there is a
+    decision to make: always under ``--dry-run``, and ahead of the billable confirm.
+    A plain resume goes straight to the live checklist — the checklist *is* the plan.
+    """
+    if gate.dry_run:
+        render_plan(plan, already=gate.already)
         _ui.info("dry-run — no changes made")
         return False
     if plan.is_empty:
+        _ui.nothing_to_do(plan.host_key, gate.already)
         return False
-    if plan.is_billable and not yes:
+    if plan.is_billable and not gate.yes:
+        render_plan(plan)
         detail = f" ({gate.vm_size.lower()})" if gate.vm_size else ""
         _ui.caution(f"this creates a billable vm{detail}")
         if not typer.confirm(f"{_ui.GLYPH_PROMPT} proceed?"):
@@ -66,21 +75,20 @@ def should_apply(plan: Plan, *, dry_run: bool, yes: bool, copy: GateCopy | None 
 def run_plan(
     plan: Plan,
     *,
-    dry_run: bool,
-    yes: bool,
+    gate: Gate,
     apply: Callable[[PlanObserver], object],
-    copy: GateCopy | None = None,
+    checklist: _ui.PhaseChecklist,
 ) -> bool:
-    """Gate a host plan, then execute it with live progress; True when it applied.
+    """Gate a host plan, then execute it under the live checklist; True when it applied.
 
-    The gate (:func:`should_apply` — render, dry-run, billable confirm) runs *before*
+    The gate (:func:`should_apply` — dry-run, empty, billable confirm) runs *before*
     the Live display starts, so the ``typer.confirm`` prompt is never painted over.
     ``apply`` is the manager call bound to everything except the observer; host and
     workspace apply signatures differ, so the thunk keeps this helper shape-agnostic.
     """
-    if not should_apply(plan, dry_run=dry_run, yes=yes, copy=copy):
+    if not should_apply(plan, gate=gate):
         return False
-    with _ui.PlanRenderer(plan.steps) as observer:
+    with checklist as observer:
         apply(observer)
     return True
 
@@ -90,14 +98,19 @@ def render_workspace_plan(plan: WorkspacePlan) -> None:
     _ui.render_workspace_plan(plan)
 
 
-def run_workspace_plan(plan: WorkspacePlan, *, apply: Callable[[PlanObserver], object]) -> None:
-    """Render a workspace plan, then execute it with live progress (no-op when empty).
+def run_workspace_plan(
+    plan: WorkspacePlan,
+    *,
+    apply: Callable[[PlanObserver], object],
+    checklist: _ui.PhaseChecklist,
+) -> None:
+    """Execute a workspace plan under the live checklist (no-op when empty).
 
-    Workspace plans carry no billable gate, so there is no prompt: render, then hand a
-    :class:`~billet.cli._ui.PlanRenderer` to the manager via the ``apply`` thunk.
+    Workspace plans carry no billable gate, so there is no prompt and no plan view —
+    the checklist itself narrates the work.
     """
-    render_workspace_plan(plan)
     if plan.is_empty:
+        _ui.nothing_to_do(plan.workspace_key)
         return
-    with _ui.PlanRenderer(plan.steps) as observer:
+    with checklist as observer:
         apply(observer)

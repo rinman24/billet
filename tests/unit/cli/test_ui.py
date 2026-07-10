@@ -1,9 +1,10 @@
-"""Tests for the CLI presentation layer (``_ui``) — plan renderer and the error view.
+"""Tests for the CLI presentation layer (``_ui``) — the phase checklist and static views.
 
-``PlanRenderer`` is fed a scripted event sequence against a recording console: with
-``force_terminal=True`` the Live checklist path runs; with a plain file the renderer must
-degrade to one sequential log line per event with no ANSI live artifacts. The error view
-renders to a plain console so the raw copy is asserted directly.
+``PhaseChecklist`` is fed a scripted PlanObserver event sequence against a recording
+console: with ``force_terminal=True`` the Live path runs; with a plain file it must
+degrade to one completion line per phase with no ANSI live artifacts; under ``--quiet``
+it stays silent. The error view and static renderables print to a plain console so the
+raw copy is asserted directly.
 """
 
 from collections.abc import Iterator
@@ -15,7 +16,7 @@ from rich.console import Console
 from billet.cli import _ui
 from billet.cli._ui import (
     BILLET_THEME,
-    PlanRenderer,
+    PhaseChecklist,
     UIState,
     configure,
     planning_status,
@@ -36,60 +37,144 @@ from billet.shared.errors import (
     HostOperationError,
     ProcessError,
 )
+from tests.unit._fakes import make_host_spec, make_workspace_spec
 
-_STEPS = (
-    PlanStep(StepKind.START, "start VM devbox"),
-    PlanStep(StepKind.WAIT_REACHABLE, "wait for SSH on devbox"),
-    PlanStep(StepKind.ENSURE_SUPPLY_CHAIN, "install Docker (base supply chain)"),
-)
+_START = PlanStep(StepKind.START, "start VM gswa-devbox")
+_WAIT = PlanStep(StepKind.WAIT_REACHABLE, "wait for SSH on gswa-devbox")
+_COMPOSE = WorkspacePlanStep(WorkspaceStepKind.COMPOSE_UP, "docker compose up -d --build")
 
 
 def _terminal_console() -> Console:
     return Console(theme=BILLET_THEME, record=True, force_terminal=True, width=80)
 
 
-def test_terminal_checklist_marks_succeeded_steps() -> None:
+def _checklist_phases() -> list[_ui.Phase]:
+    return [
+        _ui.Phase(key="host:start", label="start vm gswa-devbox", group="host"),
+        _ui.Phase(key="host:wait_reachable", label="wait for ssh", group="host"),
+        _ui.Phase(
+            key="workspace:compose_up",
+            label="docker compose up · build",
+            group="workspace",
+            bar=True,
+        ),
+    ]
+
+
+def test_checklist_tty_renders_title_groups_and_states() -> None:
     console = _terminal_console()
-    with PlanRenderer(_STEPS, console=console) as renderer:
-        renderer.step_started(_STEPS[0])
-        renderer.step_succeeded(_STEPS[0])
-        renderer.step_started(_STEPS[1])
-        renderer.step_succeeded(_STEPS[1])
+    checklist = PhaseChecklist(_checklist_phases(), title="posting api → devbox", console=console)
+    with checklist:
+        checklist.step_started(_START)
+        checklist.step_succeeded(_START)
+        checklist.step_started(_WAIT)
     text = console.export_text()
-    assert "✓ start VM devbox" in text
-    assert "✓ wait for SSH on devbox" in text
-    assert "● install Docker (base supply chain)" in text  # never started -> stays pending
+    assert "posting api → devbox" in text
+    assert "↳" in text  # the running total
+    assert "✓ start vm gswa-devbox" in text
+    assert "0:00" in text  # the frozen elapsed for the done row
+    assert "○ docker compose up · build" in text  # never started -> stays pending
+    assert "host" in text and "workspace" in text  # group rules for the combined arc
 
 
-def test_terminal_checklist_marks_a_failed_step() -> None:
+def test_checklist_tty_marks_a_failed_phase() -> None:
     console = _terminal_console()
-    with PlanRenderer(_STEPS, console=console) as renderer:
-        renderer.step_started(_STEPS[0])
-        renderer.step_succeeded(_STEPS[0])
-        renderer.step_started(_STEPS[1])
-        renderer.step_failed(_STEPS[1])
-    text = console.export_text()
-    assert "✓ start VM devbox" in text
-    assert "✗ wait for SSH on devbox" in text
+    checklist = PhaseChecklist(_checklist_phases(), title="posting api → devbox", console=console)
+    with checklist:
+        checklist.step_started(_START)
+        checklist.step_failed(_START)
+    assert "✗ start vm gswa-devbox" in console.export_text()
 
 
-def test_non_terminal_degrades_to_plain_sequential_lines() -> None:
+def test_checklist_piped_prints_one_completion_line_per_phase() -> None:
     buffer = io.StringIO()
     console = Console(theme=BILLET_THEME, file=buffer, force_terminal=False, width=200)
-    with PlanRenderer(_STEPS, console=console) as renderer:
-        renderer.step_started(_STEPS[0])
-        renderer.step_succeeded(_STEPS[0])
-        renderer.step_started(_STEPS[1])
-        renderer.step_failed(_STEPS[1])
+    checklist = PhaseChecklist(_checklist_phases(), title="posting api → devbox", console=console)
+    with checklist:
+        checklist.step_started(_START)
+        checklist.step_succeeded(_START)
+        checklist.step_started(_WAIT)
+        checklist.step_failed(_WAIT)
     output = buffer.getvalue()
     lines = [line for line in output.splitlines() if line]
     assert lines == [
-        "[billet] … start VM devbox",
-        "[billet] ✓ start VM devbox",
-        "[billet] … wait for SSH on devbox",
-        "[billet] ✗ wait for SSH on devbox",
+        "  start vm gswa-devbox … ok",
+        "  wait for ssh … failed",
     ]
     assert "\x1b[" not in output  # no ANSI live artifacts in piped output
+
+
+def test_checklist_quiet_is_silent(reset_ui_state: None) -> None:
+    configure(UIState(quiet=True))
+    console = _terminal_console()
+    checklist = PhaseChecklist(_checklist_phases(), title="posting api → devbox", console=console)
+    with checklist:
+        checklist.step_started(_START)
+        checklist.step_succeeded(_START)
+    assert console.export_text() == ""
+
+
+def test_checklist_ignores_unknown_steps() -> None:
+    buffer = io.StringIO()
+    console = Console(theme=BILLET_THEME, file=buffer, force_terminal=False, width=200)
+    checklist = PhaseChecklist(_checklist_phases(), title="t", console=console)
+    stranger = PlanStep(StepKind.CREATE, "create resource group + VM x")
+    with checklist:
+        checklist.step_started(stranger)
+        checklist.step_succeeded(stranger)
+    assert buffer.getvalue() == ""
+
+
+def test_checklist_total_elapsed_formats_mss() -> None:
+    phase = _ui.Phase(key="host:start", label="start vm x")
+    phase.t0 = 0.0
+    phase.t1 = 75.0
+    console, _ = _plain_console()
+    checklist = PhaseChecklist([phase], title="t", console=console)
+    assert checklist.total_elapsed() == "1:15"
+
+
+def test_host_phases_carry_appendix_a_labels() -> None:
+    spec = make_host_spec(vm_name="gswa-devbox")
+    plan = Plan(
+        host_key="devbox",
+        steps=(
+            PlanStep(StepKind.CREATE, "create resource group + VM gswa-devbox", billable=True),
+            PlanStep(StepKind.PIN_INBOUND, "pin inbound SSH"),
+            PlanStep(StepKind.WAIT_REACHABLE, "wait for SSH"),
+            PlanStep(StepKind.ENSURE_SUPPLY_CHAIN, "install Docker"),
+        ),
+    )
+    phases = _ui.host_phases(plan, spec)
+    assert [phase.label for phase in phases] == [
+        "create vm gswa-devbox",
+        "pin inbound ssh",
+        "wait for ssh",
+        "install docker",
+    ]
+    assert all(phase.group == "host" for phase in phases)
+
+
+def test_workspace_phases_carry_labels_and_the_compose_bar() -> None:
+    spec = make_workspace_spec(repo_url="git@github.com:genshift/api.git")
+    plan = WorkspacePlan(
+        workspace_key="api",
+        steps=(
+            WorkspacePlanStep(WorkspaceStepKind.ENSURE_SOURCE, "clone/fetch"),
+            WorkspacePlanStep(WorkspaceStepKind.COMPOSE_UP, "docker compose up -d --build"),
+            WorkspacePlanStep(WorkspaceStepKind.PERSONAL_BOOTSTRAP, "run personal bootstrap"),
+            WorkspacePlanStep(WorkspaceStepKind.POST_CREATE, "run postCreate"),
+        ),
+    )
+    phases = _ui.workspace_phases(plan, spec)
+    assert [phase.label for phase in phases] == [
+        "clone / fetch genshift/api",
+        "docker compose up · build",
+        "personal bootstrap",
+        "postCreate",
+    ]
+    assert [phase.bar for phase in phases] == [False, True, False, False]
+    assert all(phase.group == "workspace" for phase in phases)
 
 
 def test_planning_status_shows_spinner_text_on_a_terminal() -> None:
