@@ -64,7 +64,8 @@ def test_up_dry_run_renders_plan_without_applying(
     result = runner.invoke(app, ["host", "up", "--config", str(config_file), "--dry-run"])
     assert result.exit_code == 0
     assert "dry-run" in result.output
-    assert "BILLABLE" in result.output
+    assert "! billable" in result.output
+    assert "BILLABLE" not in result.output  # the shout is replaced by the tag
     assert provider.calls == ["preflight", "status"]
     assert "create" not in provider.calls
 

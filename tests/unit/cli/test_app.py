@@ -14,11 +14,20 @@ def test_version_command_prints_the_package_version() -> None:
     assert __version__ in result.stdout
 
 
-def test_bare_invocation_shows_help() -> None:
+def test_bare_invocation_shows_banner_and_command_surface() -> None:
     result = runner.invoke(app, [])
-    # no_args_is_help renders usage; Typer maps "no command given" to Click exit code 2.
-    assert result.exit_code == 2
-    assert "Usage" in result.output
+    assert result.exit_code == 0
+    # Non-tty banner degrades to the one-line wordmark; the command surface follows.
+    assert f"billet {__version__}" in result.output
+    assert "host up" in result.output
+    assert "connect <key>" in result.output
+    assert "run billet <command> --help for details." in result.output
+
+
+def test_bare_invocation_pipes_clean() -> None:
+    result = runner.invoke(app, [])
+    assert "\x1b[" not in result.output  # no ANSI when not a terminal
+    assert "██" not in result.output  # the rack is a tty-only treat
 
 
 def test_help_lists_the_version_command() -> None:

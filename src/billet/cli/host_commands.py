@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Annotated
 
 from rich import box
-from rich.console import Console
 from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
@@ -19,7 +18,7 @@ import typer
 from billet.access.host.azure_vm_provider import AzureVmHostProvider
 from billet.access.metrics.ssh_metrics_access import SshMetricsAccess
 from billet.access.registry.toml_registry_access import RegistryAccess
-from billet.cli import _planio
+from billet.cli import _planio, _ui
 from billet.cli._ui import planning_status
 from billet.contracts import HostMetrics, HostProvider, HostSpec, HostStatus, MetricsAccess
 from billet.host.manager.host_manager import HostManager
@@ -60,12 +59,14 @@ _YesOption = Annotated[
 ]
 
 
-def _build(config: Path | None, host: str | None) -> tuple[HostManager, HostSpec, str]:
+def _build(
+    config: Path | None, host: str | None
+) -> tuple[HostManager, HostSpec, str, HostProvider]:
     registry = RegistryAccess.resolve(config)
     key = registry.resolve_host_key(host)
     spec = registry.host(key)
-    subscription_id = registry.global_config().subscription_id
-    return HostManager(provider_factory(subscription_id)), spec, key
+    provider = provider_factory(registry.global_config().subscription_id)
+    return HostManager(provider), spec, key, provider
 
 
 @app.command()
@@ -78,12 +79,17 @@ def up(
     """Bring a Host up (cold provision or resume, auto-detected)."""
     try:
         with planning_status():
-            manager, spec, key = _build(config, host)
+            manager, spec, key, provider = _build(config, host)
             plan = manager.plan_up(spec)
         if _planio.run_plan(
-            plan, dry_run=dry_run, yes=yes, apply=lambda obs: manager.apply(plan, spec, obs)
+            plan,
+            dry_run=dry_run,
+            yes=yes,
+            apply=lambda obs: manager.apply(plan, spec, obs),
+            copy=_planio.GateCopy(vm_size=spec.vm_size),
         ):
-            typer.echo(f"[billet] host '{key}' is up.")
+            ip = provider.status(spec).public_ip
+            _ui.success(f"host {key} is up", ip)
     except BilletError as exc:
         _planio.fail(exc)
 
@@ -98,12 +104,16 @@ def stop(
     """Deallocate a Host (stops compute billing; the OS disk persists)."""
     try:
         with planning_status():
-            manager, spec, key = _build(config, host)
+            manager, spec, key, _provider = _build(config, host)
             plan = manager.plan_stop(spec)
         if _planio.run_plan(
-            plan, dry_run=dry_run, yes=yes, apply=lambda obs: manager.apply(plan, spec, obs)
+            plan,
+            dry_run=dry_run,
+            yes=yes,
+            apply=lambda obs: manager.apply(plan, spec, obs),
+            copy=_planio.GateCopy(already="deallocated"),
         ):
-            typer.echo(f"[billet] host '{key}' is deallocated.")
+            _ui.success(f"host {key} deallocated", "billing stopped")
     except BilletError as exc:
         _planio.fail(exc)
 
@@ -115,14 +125,12 @@ def specs(
 ) -> None:
     """Report a running Host's live CPU / memory / disk / container usage."""
     try:
-        manager, spec, key = _build(config, host)
+        manager, spec, key, _provider = _build(config, host)
         status, metrics = manager.read_metrics(spec, metrics_factory())
         _render_specs(key, spec, status, metrics)
     except BilletError as exc:
         _planio.fail(exc)
 
-
-_console = Console(highlight=False)
 
 _BAR_WIDTH = 10
 _BAR_HOT_PERCENT = 85.0
@@ -155,12 +163,16 @@ def _usage_cell(percent: float | None, fill: str, fallback: str = "?") -> Text:
 
 
 def _render_specs(key: str, spec: HostSpec, status: HostStatus, metrics: HostMetrics) -> None:
-    typer.echo(
-        f"[billet] host '{key}' — {spec.vm_name} ({spec.vm_size}), "
-        f"{status.raw_power}, ip {status.public_ip}"
+    console = _ui.get_console()
+    console.print(
+        Text(
+            f"host '{key}' — {spec.vm_name} ({spec.vm_size}), "
+            f"{status.raw_power}, ip {status.public_ip}"
+        ),
+        soft_wrap=True,
     )
     cpu = metrics.cpu
-    typer.echo(
+    console.print(
         f"  cpu:  {cpu.cores} cores, "
         f"load {cpu.load_1m:.2f} / {cpu.load_5m:.2f} / {cpu.load_15m:.2f} (1/5/15 min)"
     )
@@ -171,7 +183,7 @@ def _render_specs(key: str, spec: HostSpec, status: HostStatus, metrics: HostMet
         f"  {_gib(mem.used_bytes)} used of {_gib(mem.total_bytes)} "
         f"({_gib(mem.available_bytes)} available)"
     )
-    _console.print(mem_line)
+    console.print(mem_line)
     for disk in metrics.disks:
         disk_line = Text("  disk: ")
         disk_line.append_text(_usage_cell(disk.used_percent, _MEM_FILL))
@@ -179,15 +191,15 @@ def _render_specs(key: str, spec: HostSpec, status: HostStatus, metrics: HostMet
             f"  {disk.mount} — {_gib(disk.used_bytes)} used of {_gib(disk.size_bytes)} "
             f"({_gib(disk.available_bytes)} free)"
         )
-        _console.print(disk_line)
+        console.print(disk_line)
     if not metrics.containers:
-        typer.echo("  containers: none running")
+        console.print("  containers: none running")
         return
-    typer.echo(
+    console.print(
         f"  containers ({len(metrics.containers)} running) — "
         f"bars show share of the whole host ({cpu.cores} cores):"
     )
-    _console.print(Padding(_containers_table(metrics), (0, 0, 0, 2)))
+    console.print(Padding(_containers_table(metrics), (0, 0, 0, 2)))
 
 
 def _containers_table(metrics: HostMetrics) -> Table:
@@ -225,11 +237,11 @@ def pin_ip(
     """Re-pin the inbound SSH rule to your current egress IP/32 (no state change)."""
     try:
         with planning_status():
-            manager, spec, key = _build(config, host)
+            manager, spec, _key, _provider = _build(config, host)
             plan = manager.plan_pin_ip(spec)
         if _planio.run_plan(
             plan, dry_run=dry_run, yes=True, apply=lambda obs: manager.apply(plan, spec, obs)
         ):
-            typer.echo(f"[billet] host '{key}' inbound SSH re-pinned.")
+            _ui.success("inbound ssh re-pinned")
     except BilletError as exc:
         _planio.fail(exc)

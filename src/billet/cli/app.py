@@ -15,15 +15,15 @@ from billet.cli import _ui, host_commands, workspace_commands
 app = typer.Typer(
     name="billet",
     help="Manage cloud Hosts and the repos' devcontainer Workspaces that run on them.",
-    no_args_is_help=True,
     add_completion=False,
 )
-app.add_typer(host_commands.app, name="host")
+app.add_typer(host_commands.app, name="host", rich_help_panel="host · vm lifecycle")
 workspace_commands.register(app)
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def root(
+    ctx: typer.Context,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="stream raw az/ssh/docker output.")
     ] = False,
@@ -34,6 +34,11 @@ def root(
 ) -> None:
     """Manage cloud Hosts and the repos' devcontainer Workspaces that run on them."""
     _ui.configure(_ui.UIState(quiet=quiet, verbose=verbose, no_color=no_color))
+    if ctx.invoked_subcommand is None:
+        # Bare `billet` is the signature moment: the berth-rack banner + command surface
+        # (`billet version` stays a bare version string — scripts parse it).
+        _ui.banner(_dist_version("billet"))
+        _ui.command_surface()
 
 
 @app.command()

@@ -12,6 +12,7 @@ import io
 import pytest
 from rich.console import Console
 
+from billet.cli import _ui
 from billet.cli._ui import (
     BILLET_THEME,
     PlanRenderer,
@@ -20,7 +21,14 @@ from billet.cli._ui import (
     planning_status,
     render_error,
 )
-from billet.contracts import PlanStep, StepKind
+from billet.contracts import (
+    Plan,
+    PlanStep,
+    StepKind,
+    WorkspacePlan,
+    WorkspacePlanStep,
+    WorkspaceStepKind,
+)
 from billet.shared.errors import (
     AzLoginRequired,
     BilletError,
@@ -184,3 +192,144 @@ def test_render_error_generic_billet_error_is_the_headline() -> None:
     output = buffer.getvalue()
     assert "✗ something went sideways" in output
     assert "Traceback" not in output
+
+
+# --- plan view (§6.4) ------------------------------------------------------------------
+
+
+def test_render_host_plan_cold_create_header_rows_and_billable_tag() -> None:
+    plan = Plan(
+        host_key="devbox",
+        steps=(
+            PlanStep(
+                StepKind.CREATE,
+                "create resource group + VM gswa-devbox (Standard_D4s_v4, BILLABLE)",
+                billable=True,
+            ),
+            PlanStep(StepKind.WAIT_REACHABLE, "wait for SSH on gswa-devbox"),
+        ),
+    )
+    console, buffer = _plain_console()
+    _ui.render_host_plan(plan, console=console)
+    output = buffer.getvalue()
+    assert "plan · host devbox · cold create" in output
+    assert "1" in output and "2" in output
+    assert "create resource group + vm gswa-devbox (standard_d4s_v4)" in output
+    assert "! billable" in output
+    assert "BILLABLE" not in output
+
+
+def test_render_host_plan_resume_mode() -> None:
+    plan = Plan(
+        host_key="devbox",
+        steps=(PlanStep(StepKind.START, "start VM gswa-devbox"),),
+    )
+    console, buffer = _plain_console()
+    _ui.render_host_plan(plan, console=console)
+    assert "plan · host devbox · resume" in buffer.getvalue()
+
+
+def test_render_host_plan_empty_names_the_state() -> None:
+    console, buffer = _plain_console()
+    _ui.render_host_plan(Plan(host_key="devbox", steps=()), already="deallocated", console=console)
+    assert "· nothing to do — devbox already deallocated" in buffer.getvalue()
+
+
+def test_render_workspace_plan_numbers_rows() -> None:
+    plan = WorkspacePlan(
+        workspace_key="api",
+        steps=(
+            WorkspacePlanStep(WorkspaceStepKind.ENSURE_SOURCE, "clone/fetch repo"),
+            WorkspacePlanStep(WorkspaceStepKind.COMPOSE_UP, "docker compose up -d --build"),
+        ),
+    )
+    console, buffer = _plain_console()
+    _ui.render_workspace_plan(plan, console=console)
+    output = buffer.getvalue()
+    assert "plan · workspace api · start" in output
+    assert "docker compose up -d --build" in output
+
+
+# --- ls view (§6.5) ----------------------------------------------------------------------
+
+
+def _ls_groups() -> list[_ui.LsHostGroup]:
+    return [
+        _ui.LsHostGroup(
+            key="devbox",
+            vm_size="Standard_D4s_v4",
+            manages_workspaces=True,
+            rows=(
+                _ui.LsWorkspaceRow(key="api", state="running", alias="api.devbox", port=2222),
+                _ui.LsWorkspaceRow(key="web", state="stopped", alias="web.devbox", port=2224),
+            ),
+        ),
+        _ui.LsHostGroup(key="fleet", vm_size="Standard_D4s_v5", manages_workspaces=False, rows=()),
+    ]
+
+
+def test_render_ls_piped_prints_fixed_greppable_columns() -> None:
+    console, buffer = _plain_console()
+    _ui.render_ls(_ls_groups(), console=console)
+    lines = [line for line in buffer.getvalue().splitlines() if line]
+    assert lines[0].split() == ["HOST", "WORKSPACE", "STATE", "PORT"]
+    assert lines[1].split() == ["devbox", "api", "running", "2222"]
+    assert lines[2].split() == ["devbox", "web", "stopped", "2224"]
+    assert "●" not in buffer.getvalue()
+    assert "█" not in buffer.getvalue()
+
+
+def test_render_ls_tty_groups_hosts_and_marks_states() -> None:
+    console = _terminal_console()
+    _ui.render_ls(_ls_groups(), console=console)
+    text = console.export_text()
+    assert "devbox" in text
+    assert "standard_d4s_v4" in text  # vm size lowercased per the voice
+    assert "● api" not in text  # glyph and key live in separate aligned cells
+    assert "●" in text and "○" in text  # state dots for running and stopped
+    assert ":2222" in text
+    assert "manages no workspaces" in text  # the non-managing host header
+    assert "2 / 6" in text  # posted / rack total
+
+
+def test_render_ls_unreachable_hint_piped() -> None:
+    console, buffer = _plain_console()
+    groups = [
+        _ui.LsHostGroup(
+            key="devbox",
+            vm_size="Standard_D4s_v4",
+            manages_workspaces=True,
+            rows=(
+                _ui.LsWorkspaceRow(key="api", state="unreachable", alias="api.devbox", port=2222),
+            ),
+        )
+    ]
+    _ui.render_ls(groups, console=console)
+    output = buffer.getvalue()
+    assert "unreachable" in output
+    assert "billet host up --host devbox" in output
+
+
+# --- empty state + banner ----------------------------------------------------------------
+
+
+def test_empty_state_shows_rack_on_tty_and_plain_lines_piped() -> None:
+    lines = ("no workspaces yet.", "declare [workspaces.<key>] in config.toml,")
+    tty = _terminal_console()
+    _ui.empty_state(lines, console=tty)
+    assert "░░ ░░" in tty.export_text()
+    plain, buffer = _plain_console()
+    _ui.empty_state(lines, console=plain)
+    assert "░░" not in buffer.getvalue()
+    assert "no workspaces yet." in buffer.getvalue()
+
+
+def test_banner_rack_on_tty_one_liner_piped() -> None:
+    tty = _terminal_console()
+    _ui.banner("0.4.0", console=tty)
+    text = tty.export_text()
+    assert "██ ░░   billet 0.4.0" in text
+    assert "a berth for every repo" in text
+    plain, buffer = _plain_console()
+    _ui.banner("0.4.0", console=plain)
+    assert buffer.getvalue() == "billet 0.4.0\n"
