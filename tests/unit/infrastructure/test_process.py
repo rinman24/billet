@@ -28,3 +28,30 @@ def test_runner_raises_process_error_on_nonzero_when_checked() -> None:
 def test_runner_returns_nonzero_without_check() -> None:
     result = SubprocessRunner().run(["false"], check=False)
     assert result.returncode != 0
+
+
+def test_runner_streams_lines_from_both_pipes_and_still_captures() -> None:
+    lines: list[str] = []
+    result = SubprocessRunner().run(
+        ["sh", "-c", "echo out1; echo err1 1>&2; echo out2"], on_line=lines.append
+    )
+    assert result.returncode == 0
+    assert result.stdout == "out1\nout2\n"  # capture is verbatim
+    assert result.stderr == "err1\n"  # stderr captured too (build progress lives there)
+    assert set(lines) == {"out1", "out2", "err1"}  # streamed, newline-stripped
+
+
+def test_runner_streaming_passes_stdin_through() -> None:
+    lines: list[str] = []
+    result = SubprocessRunner().run(["cat"], input_text="piped\n", on_line=lines.append)
+    assert result.stdout == "piped\n"
+    assert lines == ["piped"]
+
+
+def test_runner_streaming_raises_process_error_with_captured_stderr() -> None:
+    lines: list[str] = []
+    with pytest.raises(ProcessError) as exc_info:
+        SubprocessRunner().run(["sh", "-c", "echo boom 1>&2; exit 3"], on_line=lines.append)
+    assert exc_info.value.returncode == 3
+    assert "boom" in exc_info.value.stderr
+    assert "boom" in lines

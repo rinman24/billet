@@ -91,12 +91,17 @@ def completed(stdout: str = "", returncode: int = 0, stderr: str = "") -> Comple
 
 
 class FakeProcessRunner:
-    """Records argv (+ stdin) and returns scripted results from a handler keyed on argv."""
+    """Records argv (+ stdin) and returns scripted results from a handler keyed on argv.
+
+    When a caller streams (``on_line``), the scripted stdout is replayed through the
+    callback line by line, and the call's index is recorded in ``streamed_calls``.
+    """
 
     def __init__(self, handler: Callable[[list[str]], CompletedProcess]) -> None:
         self._handler = handler
         self.calls: list[tuple[str, ...]] = []
         self.inputs: list[str | None] = []
+        self.streamed_calls: list[int] = []
 
     def run(
         self,
@@ -104,11 +109,16 @@ class FakeProcessRunner:
         *,
         input_text: str | None = None,
         check: bool = True,
+        on_line: Callable[[str], None] | None = None,
     ) -> CompletedProcess:
         argv_list = list(argv)
         self.calls.append(tuple(argv_list))
         self.inputs.append(input_text)
         scripted = self._handler(argv_list)
+        if on_line is not None:
+            self.streamed_calls.append(len(self.calls) - 1)
+            for line in scripted.stdout.splitlines():
+                on_line(line)
         result = CompletedProcess(
             argv=tuple(argv_list),
             returncode=scripted.returncode,

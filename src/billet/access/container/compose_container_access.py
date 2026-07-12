@@ -20,7 +20,7 @@ from typing import Any, cast
 
 from billet.contracts import DevcontainerFacts, RemoteHost, WorkspaceSpec
 from billet.infrastructure import ssh
-from billet.infrastructure.process import ProcessRunner
+from billet.infrastructure.process import OnLine, ProcessRunner
 from billet.shared import jsonc
 from billet.shared.errors import ConfigError, HostOperationError
 
@@ -77,10 +77,16 @@ def _normalize_post_create(value: Any) -> str | None:
 
 
 class ComposeContainerAccess:
-    """A ``ContainerAccess`` over ``docker compose`` on the Host via SSH."""
+    """A ``ContainerAccess`` over ``docker compose`` on the Host via SSH.
 
-    def __init__(self, runner: ProcessRunner) -> None:
+    ``on_compose_line`` (optional, wired by the composition root) streams the output of
+    the one multi-minute phase — ``compose_up`` — line by line so the client can render
+    a live log tail. Every other operation stays buffered.
+    """
+
+    def __init__(self, runner: ProcessRunner, on_compose_line: OnLine | None = None) -> None:
         self._runner = runner
+        self._on_compose_line = on_compose_line
 
     # --- reading the data contract -------------------------------------------------
 
@@ -126,7 +132,9 @@ class ComposeContainerAccess:
 
     def compose_up(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
         """Run the host bootstrap hook, write the agent-teams flag, then ``up -d --build``."""
-        self._run_script(remote, self._compose_up_script(spec, facts))
+        self._run_script(
+            remote, self._compose_up_script(spec, facts), on_line=self._on_compose_line
+        )
 
     def run_post_create(
         self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts
@@ -174,8 +182,8 @@ class ComposeContainerAccess:
 
     # --- helpers -------------------------------------------------------------------
 
-    def _run_script(self, remote: RemoteHost, script: str) -> None:
-        self._runner.run(_script_argv(remote), input_text=script)
+    def _run_script(self, remote: RemoteHost, script: str, on_line: OnLine | None = None) -> None:
+        self._runner.run(_script_argv(remote), input_text=script, on_line=on_line)
 
     @staticmethod
     def _compose_up_script(spec: WorkspaceSpec, facts: DevcontainerFacts) -> str:

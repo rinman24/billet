@@ -64,7 +64,8 @@ def test_up_dry_run_renders_plan_without_applying(
     result = runner.invoke(app, ["host", "up", "--config", str(config_file), "--dry-run"])
     assert result.exit_code == 0
     assert "dry-run" in result.output
-    assert "BILLABLE" in result.output
+    assert "! billable" in result.output
+    assert "BILLABLE" not in result.output  # the shout is replaced by the tag
     assert provider.calls == ["preflight", "status"]
     assert "create" not in provider.calls
 
@@ -123,9 +124,11 @@ def test_up_apply_failure_marks_the_step_failed_before_the_error(
     result = runner.invoke(app, ["host", "up", "--config", str(config_file)])
     assert result.exit_code == 1
     lines = result.output.splitlines()
-    failed = next(index for index, line in enumerate(lines) if "✗ start VM" in line)
-    error = next(index for index, line in enumerate(lines) if "error: az start failed" in line)
-    assert failed < error  # the red ✗ lands before the error report
+    failed = next(
+        index for index, line in enumerate(lines) if "start vm gswa-devbox … failed" in line
+    )
+    error = next(index for index, line in enumerate(lines) if "✗ az start failed" in line)
+    assert failed < error  # the failed phase lands before the error report
     assert "wait_until_reachable" not in provider.calls  # later steps never ran
 
 
