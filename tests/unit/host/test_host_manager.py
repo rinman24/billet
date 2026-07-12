@@ -4,7 +4,7 @@ import pytest
 
 from billet.contracts import HostPowerState, HostSpec, HostStatus, StepKind
 from billet.host.manager.host_manager import HostManager
-from billet.shared.errors import HostOperationError
+from billet.shared.errors import ConfigError, HostOperationError
 from tests.unit._fakes import (
     FakeHostProvider,
     FakeMetricsAccess,
@@ -30,6 +30,27 @@ def test_plan_up_cold_create_is_billable_and_ordered() -> None:
     ]
     assert plan.is_billable
     assert provider.calls == ["preflight", "status"]
+
+
+def test_plan_up_cold_create_without_provisioning_keys_raises_config_error() -> None:
+    # An adopted host's table may omit the vm_image / vm_size / … keys entirely; only a
+    # cold provision needs them, and the error must name the table and the missing keys.
+    provider = FakeHostProvider(_status(HostPowerState.NOTEXIST))
+    spec = make_host_spec(provisioning=None)
+    with pytest.raises(ConfigError, match=r"\[hosts.devbox\].*vm_image.*storage_sku"):
+        HostManager(provider).plan_up(spec)
+
+
+def test_plan_up_resume_without_provisioning_keys_succeeds() -> None:
+    # Every non-provisioning lifecycle op works on an adopted host with no VM-shape keys.
+    provider = FakeHostProvider(_status(HostPowerState.DEALLOCATED))
+    plan = HostManager(provider).plan_up(make_host_spec(provisioning=None))
+    assert [s.kind for s in plan.steps] == [
+        StepKind.ENSURE_TAGS,
+        StepKind.PIN_INBOUND,
+        StepKind.START,
+        StepKind.WAIT_REACHABLE,
+    ]
 
 
 def test_plan_up_resume_adopts_then_pins_then_starts() -> None:

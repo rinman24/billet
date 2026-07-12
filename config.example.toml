@@ -43,7 +43,11 @@ vm_name        = "gswa-devbox"
 location       = "westus3"
 admin_user     = "azureuser"
 
-# --- VM shape (required for cold create; ignored on resume/stop of an existing VM) ---
+# --- VM shape (optional as a group — only `az vm create` reads these) ---
+# Required only when billet may COLD-PROVISION this VM; declare all five or none.
+# Omit them all for an adopted host (a VM billet did not create and will never create):
+# every other operation — up/resume, stop, pin-ip, specs, ls — works without them, and
+# `billet host up` fails with a config error if the VM turns out not to exist.
 vm_image       = "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
 vm_size        = "Standard_D4s_v4"
 public_ip_sku  = "Standard"
@@ -75,17 +79,17 @@ docker_apt_url = "https://download.docker.com/linux/ubuntu"
 # explicit and is ENFORCED: the workspace verbs (add/start/stop/connect/ssh-config) refuse
 # a Host with manages_workspaces=false, and `billet ls` flags any Workspace wrongly placed
 # on one as INVALID (see ADR-0004). Do not define [workspaces.*] with host = "fleet".
+#
+# This is also the MINIMAL ADOPTED HOST block: the VM already exists (created outside
+# billet), so the five VM-shape keys are omitted — placement is everything billet needs.
+# Note adoption and manages_workspaces are independent axes: an adopted host may run
+# Workspaces, and a billet-provisioned host may decline them.
 # ---------------------------------------------------------------------------------
 # [hosts.fleet]
 # resource_group     = "GSWA-FLEET-HOST-RG"
 # vm_name            = "gswa-fleet-host"
 # location           = "westus3"
 # admin_user         = "azureuser"
-# vm_image           = "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
-# vm_size            = "Standard_D4s_v5"
-# public_ip_sku      = "Standard"
-# os_disk_gb         = 64
-# storage_sku        = "Premium_LRS"
 # manages_workspaces = false
 
 # ---------------------------------------------------------------------------------

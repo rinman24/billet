@@ -22,6 +22,21 @@ class HostPowerState(Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class ProvisioningSpec:
+    """The VM shape a cold provision needs — absent on an adopted Host.
+
+    Only ``az vm create`` consumes these keys, so a Host billet adopted (rather than
+    created) may omit them all; operations that never provision must not require them.
+    """
+
+    vm_image: str
+    vm_size: str
+    public_ip_sku: str
+    os_disk_gb: int
+    storage_sku: str
+
+
+@dataclass(frozen=True, slots=True)
 class HostSpec:
     """Operator intent for one Host, parsed from a ``[hosts.<key>]`` table."""
 
@@ -30,16 +45,17 @@ class HostSpec:
     vm_name: str
     location: str
     admin_user: str
-    vm_image: str
-    vm_size: str
-    public_ip_sku: str
-    os_disk_gb: int
-    storage_sku: str
+    provisioning: ProvisioningSpec | None
     nsg_name: str
     ssh_rule_name: str
     manages_workspaces: bool
     docker_gpg_url: str
     docker_apt_url: str
+
+    @property
+    def vm_size(self) -> str | None:
+        """The declared VM size, when the table carries provisioning keys."""
+        return self.provisioning.vm_size if self.provisioning is not None else None
 
 
 @dataclass(frozen=True, slots=True)

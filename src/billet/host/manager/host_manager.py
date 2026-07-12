@@ -19,7 +19,7 @@ from billet.contracts import (
     RemoteHost,
     StepKind,
 )
-from billet.shared.errors import HostOperationError
+from billet.shared.errors import ConfigError, HostOperationError
 
 
 def _adopt_step(spec: HostSpec) -> PlanStep:
@@ -45,12 +45,22 @@ class HostManager:
         self._provider.preflight()
         state = self._provider.status(spec).power_state
         if state is HostPowerState.NOTEXIST:
+            # Provisioning keys are validated here — the moment a cold provision is the
+            # plan — not at parse time, so adopted hosts stay queryable without them.
+            if spec.provisioning is None:
+                raise ConfigError(
+                    f"[hosts.{spec.key}]: VM {spec.vm_name} does not exist, and creating it "
+                    "needs the provisioning keys (vm_image, vm_size, public_ip_sku, "
+                    f"os_disk_gb, storage_sku) — add them to [hosts.{spec.key}], "
+                    "or fix vm_name / resource_group if the VM should already exist"
+                )
             return Plan(
                 host_key=spec.key,
                 steps=(
                     PlanStep(
                         StepKind.CREATE,
-                        f"create resource group + VM {spec.vm_name} ({spec.vm_size}, BILLABLE)",
+                        f"create resource group + VM {spec.vm_name} "
+                        f"({spec.provisioning.vm_size}, BILLABLE)",
                         billable=True,
                     ),
                     _pin_step(spec),

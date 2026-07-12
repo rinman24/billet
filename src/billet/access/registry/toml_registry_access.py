@@ -10,13 +10,16 @@ import re
 import tomllib
 from typing import Any, cast
 
-from billet.contracts import GlobalConfig, HostSpec, WorkspaceSpec
+from billet.contracts import GlobalConfig, HostSpec, ProvisioningSpec, WorkspaceSpec
 from billet.shared.errors import ConfigError
 from billet.shared.paths import resolve_config_path
 
 _DEFAULT_DOCKER_GPG_URL = "https://download.docker.com/linux/ubuntu/gpg"
 _DEFAULT_DOCKER_APT_URL = "https://download.docker.com/linux/ubuntu"
 _DEFAULT_SSH_RULE_NAME = "default-allow-ssh"
+# The VM-shape keys only `az vm create` consumes: declared all together (a provisionable
+# host) or not at all (an adopted host billet will never cold-provision).
+_PROVISIONING_KEYS = ("vm_image", "vm_size", "public_ip_sku", "os_disk_gb", "storage_sku")
 _DEFAULT_CONTAINER_SSH_PORT = 2222
 _HEX_COLOR_RE = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})")
 
@@ -95,6 +98,25 @@ class RegistryAccess:
             raise ConfigError(f"{ctx}: key 'status_color' must be a hex color like \"#C05CE0\"")
         return value
 
+    def _provisioning(self, table: dict[str, Any], ctx: str) -> ProvisioningSpec | None:
+        present = [k for k in _PROVISIONING_KEYS if k in table]
+        if not present:
+            return None
+        missing = [k for k in _PROVISIONING_KEYS if k not in table]
+        if missing:
+            raise ConfigError(
+                f"{ctx}: incomplete provisioning keys — has {', '.join(present)} but not "
+                f"{', '.join(missing)}; declare all of {', '.join(_PROVISIONING_KEYS)} "
+                "(billet can cold-provision the VM) or none (an adopted VM)"
+            )
+        return ProvisioningSpec(
+            vm_image=self._str(table, "vm_image", ctx),
+            vm_size=self._str(table, "vm_size", ctx),
+            public_ip_sku=self._str(table, "public_ip_sku", ctx),
+            os_disk_gb=self._int(table, "os_disk_gb", ctx),
+            storage_sku=self._str(table, "storage_sku", ctx),
+        )
+
     # --- public API ----------------------------------------------------------------
 
     def global_config(self) -> GlobalConfig:
@@ -129,11 +151,7 @@ class RegistryAccess:
             vm_name=vm_name,
             location=self._str(table, "location", ctx),
             admin_user=self._str(table, "admin_user", ctx),
-            vm_image=self._str(table, "vm_image", ctx),
-            vm_size=self._str(table, "vm_size", ctx),
-            public_ip_sku=self._str(table, "public_ip_sku", ctx),
-            os_disk_gb=self._int(table, "os_disk_gb", ctx),
-            storage_sku=self._str(table, "storage_sku", ctx),
+            provisioning=self._provisioning(table, ctx),
             nsg_name=self._str(table, "nsg_name", ctx, default=f"{vm_name}NSG"),
             ssh_rule_name=self._str(table, "ssh_rule_name", ctx, default=_DEFAULT_SSH_RULE_NAME),
             manages_workspaces=self._bool(table, "manages_workspaces", ctx, default=True),

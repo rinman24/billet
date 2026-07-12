@@ -488,10 +488,14 @@ class LsWorkspaceRow:
 
 @dataclass(frozen=True, slots=True)
 class LsHostGroup:
-    """One host section of the ls view: the rack and the berths posted into it."""
+    """One host section of the ls view: the rack and the berths posted into it.
+
+    ``vm_size`` is None for an adopted host whose table carries no provisioning keys;
+    the header renders a placeholder dash in its place.
+    """
 
     key: str
-    vm_size: str
+    vm_size: str | None
     manages_workspaces: bool
     rows: tuple[LsWorkspaceRow, ...]
 
@@ -505,6 +509,11 @@ def _ls_state_glyph(state: str) -> tuple[str, str]:
         "unreachable": (g.pending, "caution"),
     }
     return table[state]
+
+
+def no_size_placeholder() -> str:
+    """Return the stand-in for a host with no declared ``vm_size`` (adopted, never provisioned)."""
+    return "-" if glyphs() is _ASCII_GLYPHS else "—"
 
 
 # The brand rack has six berths; the glyph is a visual metaphor, not a quota, so the
@@ -525,7 +534,8 @@ def _rack_cells(posted: int) -> Text:
 
 
 def _ls_host_line(group: LsHostGroup) -> Text:
-    line = Text.assemble((group.key, "heading"), "   ", (group.vm_size.lower(), "meta"))
+    size = group.vm_size.lower() if group.vm_size else no_size_placeholder()
+    line = Text.assemble((group.key, "heading"), "   ", (size, "meta"))
     if not group.manages_workspaces:
         line.append(f" {glyphs().info} manages no workspaces", style="dim")
         return line

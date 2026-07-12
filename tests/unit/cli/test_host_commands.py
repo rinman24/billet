@@ -100,6 +100,49 @@ def test_up_yes_skips_confirmation(monkeypatch: pytest.MonkeyPatch, config_file:
     assert "create" in provider.calls
 
 
+# An adopted host: lifecycle-managed but never provisioned, so no VM-shape keys.
+_ADOPTED_CONFIG = """
+[billet]
+subscription_id = "sub-123"
+default_host = "fleet"
+
+[hosts.fleet]
+resource_group = "GSWA-FLEET-HOST-RG"
+vm_name = "gswa-fleet-host"
+location = "westus3"
+admin_user = "azureuser"
+"""
+
+
+@pytest.fixture
+def adopted_config_file(tmp_path: Path) -> Path:
+    path = tmp_path / "config.toml"
+    path.write_text(_ADOPTED_CONFIG)
+    return path
+
+
+def test_up_adopted_host_resumes_without_provisioning_keys(
+    monkeypatch: pytest.MonkeyPatch, adopted_config_file: Path
+) -> None:
+    provider = FakeHostProvider(HostStatus(HostPowerState.DEALLOCATED, None, ""))
+    _install(monkeypatch, provider)
+    result = runner.invoke(app, ["host", "up", "--config", str(adopted_config_file)])
+    assert result.exit_code == 0
+    assert "start" in provider.calls
+
+
+def test_up_nonexistent_vm_without_provisioning_keys_reports_actionable_config_error(
+    monkeypatch: pytest.MonkeyPatch, adopted_config_file: Path
+) -> None:
+    provider = FakeHostProvider(HostStatus(HostPowerState.NOTEXIST, None, ""))
+    _install(monkeypatch, provider)
+    result = runner.invoke(app, ["host", "up", "--config", str(adopted_config_file)])
+    assert result.exit_code == 1
+    assert "[hosts.fleet]" in result.output
+    assert "vm_image" in result.output  # names the keys a cold provision needs
+    assert "create" not in provider.calls
+
+
 def test_up_resume_applies_without_a_prompt(
     monkeypatch: pytest.MonkeyPatch, config_file: Path
 ) -> None:

@@ -169,11 +169,9 @@ def _usage_cell(percent: float | None, fill: str, fallback: str = "?") -> Text:
 
 def _render_specs(key: str, spec: HostSpec, status: HostStatus, metrics: HostMetrics) -> None:
     console = _ui.get_console()
+    size = f" ({spec.vm_size})" if spec.vm_size else ""
     console.print(
-        Text(
-            f"host '{key}' — {spec.vm_name} ({spec.vm_size}), "
-            f"{status.raw_power}, ip {status.public_ip}"
-        ),
+        Text(f"host '{key}' — {spec.vm_name}{size}, {status.raw_power}, ip {status.public_ip}"),
         soft_wrap=True,
     )
     cpu = metrics.cpu

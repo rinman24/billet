@@ -378,6 +378,23 @@ def test_render_ls_tty_groups_hosts_and_marks_states() -> None:
     assert "2 / 6" in text  # posted / rack total
 
 
+def test_render_ls_tty_renders_placeholder_for_a_host_without_vm_size() -> None:
+    # An adopted host's table may omit vm_size entirely; the rack header shows a dash.
+    console = _terminal_console()
+    groups = [
+        _ui.LsHostGroup(
+            key="adopted",
+            vm_size=None,
+            manages_workspaces=True,
+            rows=(_ui.LsWorkspaceRow(key="api", state="running", alias="api.a", port=2222),),
+        )
+    ]
+    _ui.render_ls(groups, console=console)
+    text = console.export_text()
+    assert "adopted   —" in text
+    assert "None" not in text
+
+
 def test_render_ls_unreachable_hint_piped() -> None:
     console, buffer = _plain_console()
     groups = [
