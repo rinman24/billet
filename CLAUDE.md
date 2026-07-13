@@ -25,6 +25,15 @@ The swappable `HostProvider` Protocol is the one seam that earns its abstraction
 Ubiquitous language: **Host** (a cloud VM), **Workspace** (a repo's devcontainer on a Host),
 **HostProvider** (the backend seam), **devbox** (informal name for the shared Host).
 
+## Ownership boundary (ADR-0005)
+
+billet owns the lifecycle of **instances described in its registry** (cold provision →
+start → deallocate, plus connectivity). It deliberately does **not** own durable
+infrastructure — networks, NSG policy, identity, shared platform resources — those it only
+*adopts*. Provider `create` stays thin (resource group + tagged VM, nothing else);
+provisioning keys are optional per Host and validated lazily at cold provision. PRs that
+grow `create` toward landing-zone resources violate this boundary.
+
 ## Stack & conventions
 
 - Python 3.11; `uv` for dependency management (PEP 621 + `uv.lock`); `hatchling` build backend.
