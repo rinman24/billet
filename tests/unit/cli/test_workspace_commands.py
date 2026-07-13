@@ -132,6 +132,33 @@ def test_ls_reports_unreachable_host_without_hanging_or_failing(
     assert "billet host up --host devbox" in result.output
 
 
+# An adopted host billet never provisions: no vm_image / vm_size / … keys at all.
+_ADOPTED_HOST = """
+[hosts.fleet]
+resource_group = "GSWA-FLEET-HOST-RG"
+vm_name = "gswa-fleet-host"
+location = "westus3"
+admin_user = "azureuser"
+manages_workspaces = false
+"""
+
+
+def test_ls_is_a_pure_query_over_an_adopted_host_without_provisioning_keys(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The PR #33 regression: ls parses every [hosts.*] table for its racks view, so an
+    # adopted host with no provisioning keys must not fail the query.
+    path = tmp_path / "config.toml"
+    path.write_text(_CONFIG + _ADOPTED_HOST)
+    _install(monkeypatch, container=FakeContainerAccess(running=True))
+    result = runner.invoke(app, ["ls", "--config", str(path)])
+    assert result.exit_code == 0  # parsing [hosts.fleet] must not hard-fail the query
+    assert "gswa-backend" in result.output
+    json_result = runner.invoke(app, ["ls", "--config", str(path), "--json"])
+    assert json_result.exit_code == 0
+    assert json.loads(json_result.stdout)  # still one valid record per workspace
+
+
 # --- start -------------------------------------------------------------------------
 
 

@@ -5,7 +5,13 @@ See ADR-0001 for why the contracts live here rather than beside their subsystems
 """
 
 from billet.contracts.config import GlobalConfig
-from billet.contracts.host import HostPowerState, HostProvider, HostSpec, HostStatus
+from billet.contracts.host import (
+    HostPowerState,
+    HostProvider,
+    HostSpec,
+    HostStatus,
+    ProvisioningSpec,
+)
 from billet.contracts.metrics import (
     ContainerMetrics,
     CpuMetrics,
@@ -47,6 +53,7 @@ __all__ = [
     "Plan",
     "PlanObserver",
     "PlanStep",
+    "ProvisioningSpec",
     "RemoteHost",
     "SourceAccess",
     "SshConfigAccess",

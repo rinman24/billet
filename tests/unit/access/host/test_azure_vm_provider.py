@@ -80,6 +80,13 @@ def test_create_tags_vm_as_billet_managed() -> None:
     assert "--generate-ssh-keys" in create
 
 
+def test_create_without_provisioning_keys_raises_before_any_az_call() -> None:
+    provider, runner = _provider(lambda _argv: completed())
+    with pytest.raises(HostOperationError, match="no provisioning keys"):
+        provider.create(make_host_spec(provisioning=None))
+    assert runner.calls == []
+
+
 def test_start_issues_az_vm_start() -> None:
     provider, runner = _provider(lambda _argv: completed())
     provider.start(SPEC)

@@ -91,6 +91,13 @@ class AzureVmHostProvider:
 
     def create(self, spec: HostSpec) -> None:
         """Cold-provision: create the resource group + a tagged VM. BILLABLE."""
+        # The manager only plans a CREATE step for a spec that carries provisioning keys
+        # (plan_up raises ConfigError otherwise); this guard keeps the invariant local.
+        prov = spec.provisioning
+        if prov is None:
+            raise HostOperationError(
+                f"cannot create VM {spec.vm_name}: [hosts.{spec.key}] has no provisioning keys"
+            )
         self._runner.run(
             [
                 "az", "group", "create",
@@ -103,11 +110,11 @@ class AzureVmHostProvider:
                 "az", "vm", "create",
                 "--resource-group", spec.resource_group,
                 "--name", spec.vm_name,
-                "--image", spec.vm_image,
-                "--size", spec.vm_size,
-                "--os-disk-size-gb", str(spec.os_disk_gb),
-                "--storage-sku", spec.storage_sku,
-                "--public-ip-sku", spec.public_ip_sku,
+                "--image", prov.vm_image,
+                "--size", prov.vm_size,
+                "--os-disk-size-gb", str(prov.os_disk_gb),
+                "--storage-sku", prov.storage_sku,
+                "--public-ip-sku", prov.public_ip_sku,
                 "--admin-username", spec.admin_user,
                 "--generate-ssh-keys",
                 "--tags", "managed-by=billet", f"billet-host={spec.key}",

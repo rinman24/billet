@@ -46,6 +46,18 @@ storage_sku = "Premium_LRS"
 """
 
 
+# An adopted host: billet manages lifecycle + queries but will never cold-provision it,
+# so it carries none of the vm_image / vm_size / … provisioning keys.
+_ADOPTED_HOST = """
+[billet]
+subscription_id = "s"
+[hosts.fleet]
+resource_group = "rg"
+location = "westus3"
+admin_user = "azureuser"
+"""
+
+
 def _write(tmp_path: Path, text: str) -> Path:
     path = tmp_path / "config.toml"
     path.write_text(text)
@@ -89,13 +101,29 @@ def test_parses_host_with_derived_nsg_and_defaults(tmp_path: Path) -> None:
     assert host.ssh_rule_name == "default-allow-ssh"
     assert host.manages_workspaces is True
     assert host.docker_gpg_url.endswith("/gpg")
-    assert host.os_disk_gb == 64
+    assert host.provisioning is not None
+    assert host.provisioning.os_disk_gb == 64
+    assert host.vm_size == "Standard_D4s_v4"
 
 
 def test_vm_name_defaults_to_table_key(tmp_path: Path) -> None:
     host = RegistryAccess(_write(tmp_path, _MINIMAL_HOST.format(key="fleet"))).host("fleet")
     assert host.vm_name == "fleet"
     assert host.nsg_name == "fleetNSG"
+
+
+def test_parses_adopted_host_without_provisioning_keys(tmp_path: Path) -> None:
+    host = RegistryAccess(_write(tmp_path, _ADOPTED_HOST)).host("fleet")
+    assert host.provisioning is None
+    assert host.vm_size is None
+    assert host.vm_name == "fleet"
+
+
+def test_partial_provisioning_keys_raise_at_parse(tmp_path: Path) -> None:
+    text = _ADOPTED_HOST + 'vm_size = "Standard_D4s_v5"\n'
+    reg = RegistryAccess(_write(tmp_path, text))
+    with pytest.raises(ConfigError, match="incomplete provisioning keys.*vm_image"):
+        reg.host("fleet")
 
 
 def test_parses_explicit_manages_workspaces_false(tmp_path: Path) -> None:
