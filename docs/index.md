@@ -31,7 +31,10 @@ layer, the `HostProvider` seam, and dry-run/plan layering — is recorded in
 [ADR-0001](adr/adr-0001-closed-architecture-decomposition.md). The Workspace subsystem and
 its `devcontainer.json`-as-data-contract boundary are recorded in
 [ADR-0002](adr/adr-0002-workspace-subsystem.md); the multi-workspace port↔container binding
-contract in [ADR-0003](adr/adr-0003-workspace-port-binding-contract.md).
+contract in [ADR-0003](adr/adr-0003-workspace-port-binding-contract.md). What billet does
+and does not create in the cloud — it owns registry-described *instances* (cold provision,
+start, deallocate, connectivity) and only *adopts* durable infrastructure like networks and
+identity — is recorded in [ADR-0005](adr/adr-0005-instance-lifecycle-ownership.md).
 
 ## Status
 
