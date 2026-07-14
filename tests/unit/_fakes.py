@@ -104,6 +104,7 @@ class FakeProcessRunner:
         self._handler = handler
         self.calls: list[tuple[str, ...]] = []
         self.inputs: list[str | None] = []
+        self.timeouts: list[float | None] = []
         self.streamed_calls: list[int] = []
 
     def run(
@@ -113,10 +114,12 @@ class FakeProcessRunner:
         input_text: str | None = None,
         check: bool = True,
         on_line: Callable[[str], None] | None = None,
+        timeout: float | None = None,
     ) -> CompletedProcess:
         argv_list = list(argv)
         self.calls.append(tuple(argv_list))
         self.inputs.append(input_text)
+        self.timeouts.append(timeout)
         scripted = self._handler(argv_list)
         if on_line is not None:
             self.streamed_calls.append(len(self.calls) - 1)
@@ -248,13 +251,21 @@ class FakeContainerAccess:
         self._running = running
         self.calls: list[str] = []
         self.personal_bootstrap_cmds: list[str] = []
+        self.claude_oauth_tokens: list[str | None] = []
 
     def read_facts(self, spec: WorkspaceSpec, remote: RemoteHost) -> DevcontainerFacts:
         self.calls.append("read_facts")
         return self._facts
 
-    def compose_up(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
+    def compose_up(
+        self,
+        spec: WorkspaceSpec,
+        remote: RemoteHost,
+        facts: DevcontainerFacts,
+        claude_oauth_token: str | None = None,
+    ) -> None:
         self.calls.append("compose_up")
+        self.claude_oauth_tokens.append(claude_oauth_token)
 
     def run_post_create(
         self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts
