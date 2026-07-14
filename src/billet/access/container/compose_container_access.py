@@ -130,10 +130,26 @@ class ComposeContainerAccess:
 
     # --- driving the stack ---------------------------------------------------------
 
-    def compose_up(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
-        """Run the host bootstrap hook, write the agent-teams flag, then ``up -d --build``."""
+    def compose_up(
+        self,
+        spec: WorkspaceSpec,
+        remote: RemoteHost,
+        facts: DevcontainerFacts,
+        claude_oauth_token: str | None = None,
+    ) -> None:
+        """Run the host hook, write the agent-teams flag, ``up -d --build``, inject the token.
+
+        When ``claude_oauth_token`` is set, a python3 read-merge-write runs inside the service
+        container (after the build) to merge ``CLAUDE_CODE_OAUTH_TOKEN`` into the container
+        user's ``~/.claude/settings.json`` ``env`` block (ADR-0006). ``None``/empty skips it —
+        no exec, no settings write. The token travels only as the exec'd python3's STDIN
+        (embedded in a quoted heredoc), never as any argv on the Mac, the Host, or the
+        container.
+        """
         self._run_script(
-            remote, self._compose_up_script(spec, facts), on_line=self._on_compose_line
+            remote,
+            self._compose_up_script(spec, facts, claude_oauth_token),
+            on_line=self._on_compose_line,
         )
 
     def run_post_create(
@@ -186,7 +202,9 @@ class ComposeContainerAccess:
         self._runner.run(_script_argv(remote), input_text=script, on_line=on_line)
 
     @staticmethod
-    def _compose_up_script(spec: WorkspaceSpec, facts: DevcontainerFacts) -> str:
+    def _compose_up_script(
+        spec: WorkspaceSpec, facts: DevcontainerFacts, claude_oauth_token: str | None = None
+    ) -> str:
         prelude = (
             _prelude(spec)
             + f"HOST_BOOTSTRAP_CMD={shlex.quote(spec.host_bootstrap_cmd)}\n"
@@ -206,7 +224,9 @@ class ComposeContainerAccess:
             "JSON\n"
             "fi\n"
         )
-        return prelude + agent_teams + _compose_cmd(facts, "up", "-d", "--build") + "\n"
+        build = _compose_cmd(facts, "up", "-d", "--build") + "\n"
+        inject = _claude_token_injection(facts, claude_oauth_token) if claude_oauth_token else ""
+        return prelude + agent_teams + build + inject
 
     @staticmethod
     def _exec_script(spec: WorkspaceSpec, facts: DevcontainerFacts, command: str) -> str:
@@ -282,3 +302,117 @@ def _compose_cmd(facts: DevcontainerFacts, *args: str) -> str:
     """Build a ``docker compose -f … <args>`` command with each compose file quoted."""
     files = " ".join(f"-f {shlex.quote(path)}" for path in facts.compose_files)
     return f"docker compose {files} {' '.join(args)}".strip()
+
+
+# The heredoc delimiter that carries the merge program (and the token literal) as STDIN.
+# Quoted (``<<'PYEOF'``) so the Host shell performs no expansion on the body — the token
+# passes through verbatim to the container's python3, never touched by the shell.
+_PYEOF = "BILLET_CLAUDE_TOKEN_PY"
+
+# The read-merge-write program, minus its leading literal ``token`` assignment, which is
+# prepended per-call via ``repr()`` so arbitrary token bytes are a valid, self-escaping
+# Python string literal. It never prints the token — only the path.
+#
+# Home resolution: ``Path.home()`` honours ``$HOME`` when set and otherwise falls back to
+# the current uid's passwd entry — so under ``docker compose exec -u <remote_user>`` it
+# resolves to that user's ``~`` via the uid, while a test can point it at a temp dir by
+# setting ``HOME``. The same program is therefore correct in the container and executable
+# in a unit test.
+#
+# Writes are atomic and never widen the mode: the merged JSON goes to a sibling temp file
+# created ``0600`` from the first byte, then ``os.replace`` swaps it into place on the same
+# filesystem — no world-readable window (#4) and no truncate-on-partial-failure corruption
+# (#5). An existing ``settings.json`` that is unparseable, non-object, or has a non-object
+# ``env`` is never clobbered: the program fails loudly on STDERR (without the token) and
+# exits non-zero so the compose step surfaces the error (#6).
+_CLAUDE_MERGE_BODY = """\
+import json, os, sys, tempfile
+from pathlib import Path
+
+path = Path.home() / ".claude" / "settings.json"
+claude_dir = path.parent
+if not claude_dir.exists():
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(claude_dir, 0o700)
+
+data = {}
+if path.exists():
+    raw = path.read_text()
+    try:
+        loaded = json.loads(raw)
+    except ValueError:
+        print(
+            f"[billet] refusing to overwrite {path}: file is not valid JSON. "
+            "Fix or remove it, then retry.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not isinstance(loaded, dict):
+        print(
+            f"[billet] refusing to overwrite {path}: top-level JSON is not an object.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    data = loaded
+
+env = data.get("env", {})
+if not isinstance(env, dict):
+    print(
+        f"[billet] refusing to overwrite {path}: existing 'env' is not an object.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+data["env"] = env
+
+fd, tmp = tempfile.mkstemp(dir=str(claude_dir), prefix=".settings.", suffix=".tmp")
+try:
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(data, indent=2) + "\\n")
+    os.replace(tmp, path)
+except BaseException:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+print("[billet] injected CLAUDE_CODE_OAUTH_TOKEN into", path)
+"""
+
+
+def build_claude_merge_program(token: str) -> str:
+    """Assemble the full in-container merge program: the ``token`` literal + the body.
+
+    Public (not underscore-private) so the security-critical body can be executed
+    end-to-end in a unit test — run under a real ``python3`` with ``HOME`` pointed at a temp
+    dir — rather than merely substring-asserted. The token is embedded via ``repr()`` so any
+    bytes become a valid, self-escaping Python string literal.
+    """
+    return f"token = {token!r}\n" + _CLAUDE_MERGE_BODY
+
+
+def _claude_token_injection(facts: DevcontainerFacts, token: str) -> str:
+    """Build the in-container merge step for ``CLAUDE_CODE_OAUTH_TOKEN`` (ADR-0006).
+
+    Runs ``docker compose exec -T -u <remote_user> <service> python3 -`` with the merge
+    program fed on STDIN via a quoted heredoc. ``-u <remote_user>`` guarantees the file is
+    written and owned by the container login user (the same user ``claude`` runs as over the
+    loopback sshd), so a ``0600`` ``~/.claude/settings.json`` on the persisted
+    ``*_claude_home`` volume stays readable, and ``Path.home()`` inside the program resolves
+    to that user's home via its uid. The token is embedded as a Python ``repr()`` literal
+    inside the heredoc body — so it reaches python3 only as STDIN and appears in **no** argv
+    (world-readable via ``ps``/``/proc``) at any hop.
+    """
+    program = build_claude_merge_program(token)
+    exec_cmd = _compose_cmd(
+        facts,
+        "exec",
+        "-T",
+        "-u",
+        shlex.quote(facts.remote_user),
+        shlex.quote(facts.service),
+        "python3",
+        "-",
+    )
+    return f"{exec_cmd} <<'{_PYEOF}'\n{program}{_PYEOF}\n"

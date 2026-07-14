@@ -19,6 +19,7 @@ import typer
 from billet.access.container.compose_container_access import ComposeContainerAccess
 from billet.access.host.azure_vm_provider import AzureVmHostProvider
 from billet.access.registry.toml_registry_access import RegistryAccess
+from billet.access.secret.claude_token_access import ClaudeTokenAccess
 from billet.access.source.git_source_access import GitSourceAccess
 from billet.access.sshconfig.file_ssh_config_access import FileSshConfigAccess
 from billet.cli import _planio, _ui
@@ -36,6 +37,7 @@ from billet.shared.errors import BilletError, HostOperationError
 from billet.workspace.manager.workspace_manager import WorkspaceManager
 
 ProviderFactory = Callable[[str], HostProvider]
+ClaudeTokenAccessFactory = Callable[[], ClaudeTokenAccess]
 
 
 class WorkspaceManagerFactory(Protocol):
@@ -75,9 +77,14 @@ def _default_workspace_manager_factory(on_line: OnLine | None = None) -> Workspa
     )
 
 
-# Replaced by tests with fakes so the CLI is exercised without `az` / `ssh`.
+def _default_claude_token_access() -> ClaudeTokenAccess:
+    return ClaudeTokenAccess(SubprocessRunner())
+
+
+# Replaced by tests with fakes so the CLI is exercised without `az` / `ssh` / secret stores.
 provider_factory: ProviderFactory = _default_provider_factory
 workspace_manager_factory: WorkspaceManagerFactory = _default_workspace_manager_factory
+claude_token_access_factory: ClaudeTokenAccessFactory = _default_claude_token_access
 
 
 def _execvp(argv: list[str]) -> NoReturn:
@@ -250,6 +257,11 @@ def start(
             host_plan, gate=_planio.Gate(yes=yes, vm_size=host.vm_size)
         )
 
+        # Fetch the central Claude OAuth token LOCALLY (only on the apply path — never in
+        # dry-run). A fetch failure raises here and aborts start before any container work.
+        # The value is threaded by call into the injection; it is never stored or logged.
+        claude_oauth_token = claude_token_access_factory().resolve(global_config.claude_token_cmd)
+
         # One checklist carries the whole posting arc: host phases, then workspace phases.
         checklist = _ui.PhaseChecklist(
             [
@@ -268,6 +280,7 @@ def start(
                 ws,
                 remote,
                 personal_bootstrap_cmd=global_config.personal_bootstrap_cmd,
+                claude_oauth_token=claude_oauth_token,
                 observer=observer,
             )
         _ui.success(f"workspace {key} is up", checklist.total_elapsed())

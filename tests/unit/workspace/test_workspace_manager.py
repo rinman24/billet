@@ -138,6 +138,20 @@ def test_start_skips_personal_bootstrap_when_empty() -> None:
     assert "run_personal_bootstrap" not in container.calls
 
 
+def test_apply_start_threads_claude_token_to_compose_up() -> None:
+    manager, _, container, _ = _manager()
+    plan = manager.plan_start(SPEC, verify=False)
+    manager.apply_start(plan, SPEC, REMOTE, personal_bootstrap_cmd="", claude_oauth_token="tok-1")
+    assert container.claude_oauth_tokens == ["tok-1"]
+
+
+def test_apply_start_passes_none_token_when_unset() -> None:
+    manager, _, container, _ = _manager()
+    plan = manager.plan_start(SPEC, verify=False)
+    manager.apply_start(plan, SPEC, REMOTE, personal_bootstrap_cmd="")
+    assert container.claude_oauth_tokens == [None]
+
+
 def test_apply_start_emits_started_then_succeeded_for_every_step_in_order() -> None:
     manager, *_ = _manager()
     plan = manager.plan_start(SPEC, verify=True)

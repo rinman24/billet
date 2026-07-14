@@ -115,19 +115,24 @@ class WorkspaceManager:
             )
         return WorkspacePlan(workspace_key=spec.key, steps=tuple(steps))
 
-    def apply_start(
+    def apply_start(  # noqa: PLR0913 — start threads each operator input explicitly (no bag)
         self,
         plan: WorkspacePlan,
         spec: WorkspaceSpec,
         remote: RemoteHost,
         *,
         personal_bootstrap_cmd: str,
+        claude_oauth_token: str | None = None,
         observer: PlanObserver | None = None,
     ) -> DevcontainerFacts:
         """Execute a start plan; return the facts read from the repo's devcontainer.json.
 
         ``personal_bootstrap_cmd`` is required so plan/apply coupling stays explicit: pass
         the same value the plan was built with (empty disables the phase in both places).
+
+        ``claude_oauth_token`` (already resolved by the caller from ``claude_token_cmd``) is
+        threaded to ``compose_up`` for the in-container settings.json injection (ADR-0006);
+        ``None``/empty skips injection. It is never stored on the manager.
 
         The ``observer`` receives semantic started/succeeded/failed events per step (the
         manager still never prints); a failed step re-raises and aborts the remainder.
@@ -145,7 +150,12 @@ class WorkspaceManager:
             obs.step_started(step)
             try:
                 self._dispatch_start(
-                    step.kind, spec, remote, read_facts_once, personal_bootstrap_cmd
+                    step.kind,
+                    spec,
+                    remote,
+                    read_facts_once,
+                    personal_bootstrap_cmd,
+                    claude_oauth_token,
                 )
             except Exception:
                 obs.step_failed(step)
@@ -153,18 +163,19 @@ class WorkspaceManager:
             obs.step_succeeded(step)
         return read_facts_once()
 
-    def _dispatch_start(
+    def _dispatch_start(  # noqa: PLR0913 — one dispatch arm per step; inputs stay explicit
         self,
         kind: WorkspaceStepKind,
         spec: WorkspaceSpec,
         remote: RemoteHost,
         facts: Callable[[], DevcontainerFacts],
         personal_bootstrap_cmd: str,
+        claude_oauth_token: str | None,
     ) -> None:
         if kind is WorkspaceStepKind.ENSURE_SOURCE:
             self._source.ensure_clone(spec, remote)
         elif kind is WorkspaceStepKind.COMPOSE_UP:
-            self._container.compose_up(spec, remote, facts())
+            self._container.compose_up(spec, remote, facts(), claude_oauth_token)
         elif kind is WorkspaceStepKind.POST_CREATE:
             self._container.run_post_create(spec, remote, facts())
         elif kind is WorkspaceStepKind.PERSONAL_BOOTSTRAP:

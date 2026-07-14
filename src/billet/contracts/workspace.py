@@ -144,8 +144,19 @@ class ContainerAccess(Protocol):
         """Read + parse the repo's ``devcontainer.json`` on the host into facts."""
         ...
 
-    def compose_up(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
-        """Run the host bootstrap hook, write the agent-teams flag, then ``compose up -d --build``."""
+    def compose_up(
+        self,
+        spec: WorkspaceSpec,
+        remote: RemoteHost,
+        facts: DevcontainerFacts,
+        claude_oauth_token: str | None = None,
+    ) -> None:
+        """Run the host hook, write the agent-teams flag, then ``compose up -d --build``.
+
+        When ``claude_oauth_token`` is set, also merge it into the container's user-level
+        ``~/.claude/settings.json`` ``env`` block so ``claude`` authenticates non-interactively
+        (ADR-0006). ``None``/empty skips injection entirely.
+        """
         ...
 
     def run_post_create(

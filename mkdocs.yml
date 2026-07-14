@@ -49,3 +49,4 @@ nav:
       - ADR-0003 Workspace port-binding contract: adr/adr-0003-workspace-port-binding-contract.md
       - ADR-0004 Host manages-workspaces rule: adr/adr-0004-host-manages-workspaces.md
       - ADR-0005 Instance-lifecycle ownership: adr/adr-0005-instance-lifecycle-ownership.md
+      - ADR-0006 Claude token injection: adr/adr-0006-claude-token-injection.md

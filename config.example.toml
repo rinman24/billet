@@ -30,6 +30,23 @@ default_host = "devbox"
 # service's compose-provided environment (`environment:` / `env_file:`); don't rely on
 # those variables here. Empty (the default) disables it.
 # personal_bootstrap_cmd = "git clone git@github.com:me/dotfiles ~/dotfiles && bash ~/dotfiles/install.sh"
+#
+# Optional. A shell command billet runs LOCALLY (on your machine) at `billet start` time to
+# fetch ONE central Claude Code OAuth token. Its STDOUT is captured as the token and injected
+# into the Workspace container's user-level ~/.claude/settings.json `env` block, so `claude`
+# inside the container (via `billet connect` or a fleet runner) authenticates with NO
+# interactive login and NO per-repo compose/devcontainer change (see ADR-0006). This is why
+# it goes into settings.json and not `environment:`: an sshd login shell inherits neither
+# (note above). The command must print the token to STDOUT and nothing else there; billet
+# never interpolates any value into it, reads only STDOUT, surfaces STDERR on failure, and
+# aborts `start` on a non-zero exit / empty output / timeout. The token is never logged and
+# never appears in any argv. Empty (the default) disables the feature entirely.
+# Generate the token once with `claude setup-token`, store it, then point at the store:
+#   macOS Keychain: claude_token_cmd = "security find-generic-password -s billet-claude -w"
+#   1Password:      claude_token_cmd = "op read op://Private/claude-code/token"
+#   HashiCorp Vault: claude_token_cmd = "vault kv get -field=token secret/billet/claude"
+#   Plain env (shorthand): claude_token_cmd = "printenv CLAUDE_CODE_OAUTH_TOKEN"
+# claude_token_cmd = "security find-generic-password -s billet-claude -w"
 
 # ---------------------------------------------------------------------------------
 # [hosts.<key>] — one table per cloud Host (a VM). The table key (here "devbox") is

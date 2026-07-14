@@ -131,6 +131,7 @@ class RegistryAccess:
             subscription_id=subscription_id,
             default_host=default_host,
             personal_bootstrap_cmd=self._str(table, "personal_bootstrap_cmd", ctx, default=""),
+            claude_token_cmd=self._str(table, "claude_token_cmd", ctx, default=""),
         )
 
     def host_keys(self) -> list[str]:

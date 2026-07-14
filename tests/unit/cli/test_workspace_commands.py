@@ -230,6 +230,64 @@ def test_start_runs_personal_bootstrap_from_global_config(
     assert cont.personal_bootstrap_cmds == ["bash ~/dotfiles/install.sh"]
 
 
+class _FakeTokenAccess:
+    """Records the command strings passed to resolve and returns a configured token."""
+
+    def __init__(self, token: str | None) -> None:
+        self._token = token
+        self.commands: list[str] = []
+
+    def resolve(self, command: str) -> str | None:
+        self.commands.append(command)
+        return self._token if command else None
+
+
+def _config_with_token_cmd(tmp_path: Path) -> Path:
+    text = _CONFIG.replace(
+        'default_host = "devbox"',
+        'default_host = "devbox"\nclaude_token_cmd = "printf tok-abc"',
+    )
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    return path
+
+
+def test_start_resolves_and_threads_the_claude_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = _config_with_token_cmd(tmp_path)
+    _, _, cont, _ = _install(monkeypatch)
+    fake = _FakeTokenAccess("tok-abc")
+    monkeypatch.setattr(wc, "claude_token_access_factory", lambda: fake)
+    result = runner.invoke(app, ["start", "gswa-backend", "--config", str(path)])
+    assert result.exit_code == 0
+    assert fake.commands == ["printf tok-abc"]  # the operator's local fetch command, verbatim
+    assert cont.claude_oauth_tokens == ["tok-abc"]  # threaded into compose_up
+    assert "tok-abc" not in result.output  # never echoed to the operator
+
+
+def test_start_threads_no_token_when_cmd_absent(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    # Default config has no claude_token_cmd: the real resolver returns None without shelling out.
+    _, _, cont, _ = _install(monkeypatch)
+    result = runner.invoke(app, ["start", "gswa-backend", "--config", str(config_file)])
+    assert result.exit_code == 0
+    assert cont.claude_oauth_tokens == [None]
+
+
+def test_start_dry_run_does_not_fetch_the_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = _config_with_token_cmd(tmp_path)
+    _install(monkeypatch, provider=FakeHostProvider(HostStatus(HostPowerState.NOTEXIST, None, "")))
+    fake = _FakeTokenAccess("tok-abc")
+    monkeypatch.setattr(wc, "claude_token_access_factory", lambda: fake)
+    result = runner.invoke(app, ["start", "gswa-backend", "--config", str(path), "--dry-run"])
+    assert result.exit_code == 0
+    assert fake.commands == []  # no secret fetch on the planning path
+
+
 # --- stop --------------------------------------------------------------------------
 
 
