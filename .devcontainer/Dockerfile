@@ -67,6 +67,17 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends -t bookworm-backports git; \
     rm -rf /var/lib/apt/lists/*
 
+# Code intelligence: pyright-langserver for Claude Code's pyright-lsp plugin (enabled in
+# ~/.claude via the chezmoi dotfiles bootstrap). The plugin has no path setting, so the
+# binary must be on PATH; Node is already installed above, so a root `npm install -g` puts
+# pyright-langserver in /usr/local/bin — on PATH for the runtime `dev` user. Unpinned by
+# design — same "versions float from the pinned repos, image tag = reproducibility" stance as
+# node/git/az above. It's an editor assist; `make lint` (uv.lock's pyright) stays the
+# authoritative gate, so exact parity with the lockfile isn't needed and would only add an
+# unenforced version to keep in sync.
+RUN npm install -g pyright \
+    && pyright-langserver --help >/dev/null 2>&1 || true
+
 # Dev ergonomics, baked system-wide: a plain `git push` on a new branch auto-creates the
 # same-named upstream instead of erroring.
 RUN git config --system push.autoSetupRemote true
