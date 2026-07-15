@@ -188,6 +188,28 @@ def test_planning_status_shows_spinner_text_on_a_terminal() -> None:
     assert "planning" in console.export_text()
 
 
+def test_planning_status_shows_phase_text_on_a_terminal() -> None:
+    console = _terminal_console()
+    with planning_status(console, text="probing hosts · azure"):
+        pass  # the first frame paints synchronously — no refresh-thread timing to wait on
+    assert "probing hosts" in console.export_text()
+
+
+def test_planning_status_update_swaps_label() -> None:
+    console = _terminal_console()
+    with planning_status(console) as status:
+        status.update("reading berths")
+    assert "reading berths" in console.export_text()
+
+
+def test_planning_status_update_is_noop_off_terminal() -> None:
+    buffer = io.StringIO()
+    console = Console(theme=BILLET_THEME, file=buffer, force_terminal=False, width=200)
+    with planning_status(console) as status:
+        status.update("reading berths")
+    assert buffer.getvalue() == ""
+
+
 def test_planning_status_is_silent_when_not_a_terminal() -> None:
     buffer = io.StringIO()
     console = Console(theme=BILLET_THEME, file=buffer, force_terminal=False, width=200)

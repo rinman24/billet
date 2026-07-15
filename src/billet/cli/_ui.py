@@ -1025,8 +1025,36 @@ class PhaseChecklist:
         return Group(*renderables)
 
 
+class PlanningStatus:
+    """Handle yielded by ``planning_status``; ``update`` swaps the label in place.
+
+    A no-op instance (spinner and live both ``None``) is yielded on a non-terminal so
+    callers can call ``update`` unconditionally.
+
+    Parameters
+    ----------
+    spinner : Spinner | None
+        The live spinner whose text is swapped, or ``None`` off a terminal.
+    live : Live | None
+        The live display repainted on each update, or ``None`` off a terminal.
+    """
+
+    def __init__(self, spinner: Spinner | None, live: Live | None) -> None:
+        self._spinner = spinner
+        self._live = live
+
+    def update(self, text: str) -> None:
+        """Swap the spinner label to ``text`` and repaint (no-op off a terminal)."""
+        if self._spinner is None or self._live is None:
+            return
+        self._spinner.update(text=Text(text, style="meta"))
+        self._live.refresh()
+
+
 @contextmanager
-def planning_status(console: Console | None = None, text: str = "planning…") -> Generator[None]:
+def planning_status(
+    console: Console | None = None, text: str = "planning…"
+) -> Generator[PlanningStatus]:
     """Show a transient status spinner (silent when not a terminal).
 
     Wrap plan construction (registry reads plus the provider's ``az`` round-trips) in
@@ -1034,15 +1062,21 @@ def planning_status(console: Console | None = None, text: str = "planning…") -
     synchronously (``Console.status`` would leave it to the refresh thread, so a fast
     body could exit before anything showed). When stdout is not a terminal the body
     simply runs with no output.
+
+    Yields
+    ------
+    PlanningStatus
+        A handle whose ``update`` swaps the spinner label in place; a no-op instance
+        is yielded off a terminal so callers can call ``update`` unconditionally.
     """
     active = console if console is not None else get_console()
     if not active.is_terminal:
-        yield
+        yield PlanningStatus(None, None)
         return
     spinner = Spinner(glyphs().spinner, text=Text(text, style="meta"), style="building")
     live = Live(spinner, console=active, refresh_per_second=12.5, transient=True)
     live.start(refresh=True)
     try:
-        yield
+        yield PlanningStatus(spinner, live)
     finally:
         live.stop()

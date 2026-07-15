@@ -591,6 +591,17 @@ def test_ls_json_emits_machine_readable_records(
     ]
 
 
+def test_ls_json_output_has_no_status_chrome(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    # --- json is machine-readable: the phase-status line must never leak into stdout, so the
+    # whole output parses as JSON with no stray spinner/ansi characters.
+    _install(monkeypatch, container=FakeContainerAccess(running=True))
+    result = runner.invoke(app, ["ls", "--config", str(config_file), "--json"])
+    assert result.exit_code == 0
+    json.loads(result.stdout)  # parses clean — no stray chrome around the records
+
+
 def test_connect_prints_status_before_exec(
     monkeypatch: pytest.MonkeyPatch, config_file: Path
 ) -> None:

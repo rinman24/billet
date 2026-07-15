@@ -10,6 +10,7 @@ These commands are registered on the root app at top level by :func:`register`.
 """
 
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager, nullcontext
 import os
 from pathlib import Path
 from typing import Annotated, NoReturn, Protocol
@@ -150,6 +151,9 @@ def add(key: _KeyArgument, config: _ConfigOption = None) -> None:
 
 # --- ls ----------------------------------------------------------------------------
 
+_LS_PHASE_HOSTS = "probing hosts · azure"
+_LS_PHASE_BERTHS = "reading berths"
+
 
 def ls(config: _ConfigOption = None, as_json: _JsonOption = False) -> None:
     """List registered Workspaces and whether each container is running.
@@ -175,18 +179,27 @@ def ls(config: _ConfigOption = None, as_json: _JsonOption = False) -> None:
             return
         # ls is a query, not a command (ADR-0004 §2): a Workspace on a non-managing Host is
         # surfaced inline as invalid rather than raising, and only managing Hosts are probed.
+        provider = provider_factory(registry.global_config().subscription_id)
         probeable = [
             (ws, _remote_via_alias(registry.host(ws.host), ws))
             for ws in workspaces
             if registry.host(ws.host).manages_workspaces
         ]
-        statuses = {status.key: status for status in manager.status_all(probeable)}
-        # The header power/size/ip probe: exactly one status call per host (a host that
-        # fails to probe returns NOTEXIST, not an exception, so ls still renders).
-        provider = provider_factory(registry.global_config().subscription_id)
-        host_statuses = {
-            host_key: provider.status(registry.host(host_key)) for host_key in registry.host_keys()
-        }
+        # One transient status line spans both live phases: first the header power/size/ip
+        # probe (exactly one provider.status call per host — a host that fails to probe returns
+        # NOTEXIST, not an exception, so ls still renders), then the same line updates while the
+        # managing Hosts' Workspaces are probed. Off a terminal (and under --json) it is silent.
+        phase_cm: AbstractContextManager[_ui.PlanningStatus | None] = (
+            _ui.planning_status(text=_LS_PHASE_HOSTS) if not as_json else nullcontext()
+        )
+        with phase_cm as phase:
+            host_statuses = {
+                host_key: provider.status(registry.host(host_key))
+                for host_key in registry.host_keys()
+            }
+            if phase is not None and probeable:
+                phase.update(_LS_PHASE_BERTHS)
+            statuses = {status.key: status for status in manager.status_all(probeable)}
         groups = [
             _ls_group(registry.host(host_key), workspaces, statuses, host_statuses[host_key])
             for host_key in registry.host_keys()
