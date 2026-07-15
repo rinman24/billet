@@ -50,6 +50,10 @@ jobs:
           set -euo pipefail
           uv run pyright
 
+      - name: Pyright pin matches uv.lock
+        shell: bash
+        run: bash scripts/check-pyright-pin.sh --dockerfile .devcontainer/Dockerfile
+
       - name: import-linter (layer contract)
         shell: bash
         run: |

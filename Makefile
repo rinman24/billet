@@ -10,6 +10,7 @@ install: ## Sync the locked dev environment (.venv)
 lint: ## Ruff check + Pyright (strict); must report 0 errors
 	uv run ruff check .
 	uv run pyright
+	bash scripts/check-pyright-pin.sh --dockerfile .devcontainer/Dockerfile
 
 format: ## Apply Ruff formatting
 	uv run ruff format .
