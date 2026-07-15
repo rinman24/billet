@@ -10,9 +10,11 @@ raw copy is asserted directly.
 from collections.abc import Iterator
 import io
 import json
+import re
 
 import pytest
 from rich.console import Console
+from rich.text import Text
 
 from billet.cli import _ui
 from billet.cli._ui import (
@@ -419,19 +421,28 @@ def test_render_ls_tty_deallocated_host_shows_no_ip() -> None:
 
 
 def test_render_ls_running_power_word_is_mint() -> None:
-    # A HOST's running word is mint (`done`), distinct from a WORKSPACE's magenta running dot.
-    # color_system is pinned: this test asserts truecolor escape codes, which a terminal
-    # without truecolor support (e.g. CI) would otherwise downgrade to 16-color.
-    console = Console(
-        theme=BILLET_THEME, record=True, force_terminal=True, width=80, color_system="truecolor"
-    )
+    # A HOST's running word wears `done` (mint), deliberately distinct from a WORKSPACE's
+    # magenta running dot. rich caches each style's ansi codes on the shared theme Style
+    # objects at first render, process-wide — whichever color system rendered first wins —
+    # so the expected escape codes are probed through this same console rather than
+    # hard-coded as truecolor sequences (a 16-color first render would downgrade them all).
+    console = _terminal_console()
+    console.print(Text("mintprobe", style="done"))
+    console.print(Text("magentaprobe", style="running"))
+    console.print(Text("metaprobe", style="meta"))
     _ui.render_ls(_ls_groups(), console=console)
     styled = console.export_text(styles=True)
-    mint = "\x1b[38;2;63;210;190m"  # `done`  → #3FD2BE
-    magenta = "\x1b[38;2;192;92;224m"  # `running` → #C05CE0
-    assert f"{mint}running\x1b[0m" in styled  # the host power word, mint
+
+    def probe(name: str) -> str:
+        match = re.search(r"(\x1b\[[0-9;]+m)" + name, styled)
+        assert match is not None, f"probe {name} not found in styled export"
+        return match.group(1)
+
+    mint, magenta, meta = probe("mintprobe"), probe("magentaprobe"), probe("metaprobe")
+    assert mint != magenta  # the host/workspace color distinction must survive downgrades
+    assert f"{mint}running\x1b[0m" in styled  # the host power word, mint (`done`)
     assert f"{magenta}running\x1b[0m" in styled  # the workspace dot's word stays magenta
-    assert "\x1b[38;2;131;115;144m20.51.132.7\x1b[0m" in styled  # the public ip, styled meta
+    assert f"{meta}20.51.132.7\x1b[0m" in styled  # the public ip, styled meta
 
 
 def test_render_ls_tty_renders_placeholder_for_a_host_without_vm_size() -> None:
