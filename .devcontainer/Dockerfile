@@ -70,18 +70,16 @@ RUN set -eux; \
 # Code intelligence: pyright-langserver for Claude Code's pyright-lsp plugin (enabled in
 # ~/.claude via the chezmoi dotfiles bootstrap). The plugin has no path setting, so the
 # binary must be on PATH; Node is already installed above, so a root `npm install -g` puts
-# pyright-langserver in /usr/bin — on PATH for the runtime `dev` user. Unpinned by
-# design — same "versions float from the pinned repos, image tag = reproducibility" stance as
-# node/git/az above. It's an editor assist; `make lint` (uv.lock's pyright) stays the
-# authoritative gate, so exact parity with the lockfile isn't needed and would only add an
-# unenforced version to keep in sync.
-RUN npm install -g pyright \
+# pyright-langserver in /usr/bin — on PATH for the runtime `dev` user. Pinned to the exact
+# version in uv.lock (1.1.411) so the editor's pyright matches `make lint` (uv run
+# pyright) — the authoritative CI gate — instead of floating out of sync with it.
+RUN npm install -g pyright@1.1.411 \
     && pyright-langserver --help >/dev/null 2>&1 || true
 
 # NeoVim (dev-only editor). bookworm's apt nvim is 0.7 — too old for the modern
 # plugin/LSP ecosystem (lazy.nvim, nvim-lspconfig, treesitter want 0.9+), so pull the
 # pinned v0.12.4 release tarball instead of apt and verify its SHA-256 — the same
-# digest-pinned reproducibility as the uv image above (pyright, by contrast, floats).
+# digest-pinned reproducibility as the uv image above.
 # Editor config (init.lua, plugins) stays with the chezmoi dotfiles bootstrap, not baked
 # here: the same install-here / configure-in-dotfiles split as pyright above. x86_64 only
 # — the Azure Host build/deploy target is amd64; an arm64 build would need the
