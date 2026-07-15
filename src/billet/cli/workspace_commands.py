@@ -159,7 +159,10 @@ def ls(config: _ConfigOption = None, as_json: _JsonOption = False) -> None:
     """List registered Workspaces and whether each container is running.
 
     The host header carries a live power/size/ip probe (one ``provider.status`` call per
-    host, managing or not — orthogonal to the ADR-0004 workspace probe below).
+    host, managing or not — orthogonal to the ADR-0004 workspace probe below). While the
+    probes run, a transient status line names the phase in flight (``probing hosts ·
+    azure``, then ``reading berths``) on a terminal, and is silent on machine paths
+    (``--json`` / non-tty).
     """
     try:
         registry = _registry(config)
