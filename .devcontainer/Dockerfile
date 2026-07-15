@@ -78,6 +78,23 @@ RUN set -eux; \
 RUN npm install -g pyright \
     && pyright-langserver --help >/dev/null 2>&1 || true
 
+# NeoVim (dev-only editor). bookworm's apt nvim is 0.7 — too old for the modern
+# plugin/LSP ecosystem (lazy.nvim, nvim-lspconfig, treesitter want 0.9+), so pull the
+# pinned v0.12.4 release tarball instead of apt and verify its SHA-256 — the same
+# digest-pinned reproducibility as the uv image above (pyright, by contrast, floats).
+# Editor config (init.lua, plugins) stays with the chezmoi dotfiles bootstrap, not baked
+# here: the same install-here / configure-in-dotfiles split as pyright above. x86_64 only
+# — the Azure Host build/deploy target is amd64; an arm64 build would need the
+# nvim-linux-arm64.tar.gz asset and its own digest.
+RUN set -eux; \
+    curl -fsSL -o /tmp/nvim.tar.gz \
+        https://github.com/neovim/neovim/releases/download/v0.12.4/nvim-linux-x86_64.tar.gz; \
+    echo "012bf3fcac5ade43914df3f174668bf64d05e049a4f032a388c027b1ebd78628  /tmp/nvim.tar.gz" | sha256sum -c -; \
+    tar -C /opt -xzf /tmp/nvim.tar.gz; \
+    ln -s /opt/nvim-linux-x86_64/bin/nvim /usr/local/bin/nvim; \
+    rm /tmp/nvim.tar.gz; \
+    nvim --version | head -1
+
 # Dev ergonomics, baked system-wide: a plain `git push` on a new branch auto-creates the
 # same-named upstream instead of erroring.
 RUN git config --system push.autoSetupRemote true
