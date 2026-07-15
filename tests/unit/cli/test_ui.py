@@ -420,7 +420,11 @@ def test_render_ls_tty_deallocated_host_shows_no_ip() -> None:
 
 def test_render_ls_running_power_word_is_mint() -> None:
     # A HOST's running word is mint (`done`), distinct from a WORKSPACE's magenta running dot.
-    console = _terminal_console()
+    # color_system is pinned: this test asserts truecolor escape codes, which a terminal
+    # without truecolor support (e.g. CI) would otherwise downgrade to 16-color.
+    console = Console(
+        theme=BILLET_THEME, record=True, force_terminal=True, width=80, color_system="truecolor"
+    )
     _ui.render_ls(_ls_groups(), console=console)
     styled = console.export_text(styles=True)
     mint = "\x1b[38;2;63;210;190m"  # `done`  → #3FD2BE
