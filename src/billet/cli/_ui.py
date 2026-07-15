@@ -750,7 +750,7 @@ def _host_phase_label(kind: StepKind, spec: HostSpec) -> str:
 
 def _workspace_phase_label(kind: WorkspaceStepKind, spec: WorkspaceSpec) -> str:
     labels: dict[WorkspaceStepKind, str] = {
-        WorkspaceStepKind.ENSURE_SOURCE: f"clone / fetch {_repo_short(spec.repo_url)}",
+        WorkspaceStepKind.ENSURE_SOURCE: f"clone / fast-forward {_repo_short(spec.repo_url)}",
         WorkspaceStepKind.COMPOSE_UP: "docker compose up · build",
         WorkspaceStepKind.POST_CREATE: "postCreate",
         WorkspaceStepKind.PERSONAL_BOOTSTRAP: "personal bootstrap",
