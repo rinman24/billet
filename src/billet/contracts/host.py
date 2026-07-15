@@ -60,11 +60,12 @@ class HostSpec:
 
 @dataclass(frozen=True, slots=True)
 class HostStatus:
-    """Live host state derived from the backend."""
+    """Live host state derived from the backend (power, IP, and live hardware size)."""
 
     power_state: HostPowerState
     public_ip: str | None
     raw_power: str
+    vm_size: str | None = None  # live hardware size; None when the host doesn't exist
 
 
 class HostProvider(Protocol):

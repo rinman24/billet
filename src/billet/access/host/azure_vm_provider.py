@@ -7,6 +7,7 @@ lifted ``up.sh`` / ``stop.sh`` / ``pin-ip.sh`` host steps.
 """
 
 from collections.abc import Callable
+import json
 import shlex
 import time
 
@@ -73,21 +74,30 @@ class AzureVmHostProvider:
         az.pin_subscription(self._runner, self._subscription_id)
 
     def status(self, spec: HostSpec) -> HostStatus:
-        """Map ``az vm show -d`` power state (+ public IP if running) into a HostStatus."""
+        """Map ``az vm show -d`` into a HostStatus (power state, live VM size, +IP if running).
+
+        A single ``az vm show`` projects both the power state and the live hardware size, so
+        the status carries the VM's actual size without an extra round-trip.
+        """
         result = self._runner.run(
             [
                 "az", "vm", "show", "-d",
                 "-g", spec.resource_group, "-n", spec.vm_name,
-                "--query", "powerState", "-o", "tsv",
+                "--query", "{power:powerState, size:hardwareProfile.vmSize}", "-o", "json",
             ],
             check=False,
         )  # fmt: skip
         if result.returncode != 0:
-            return HostStatus(power_state=HostPowerState.NOTEXIST, public_ip=None, raw_power="")
-        raw = result.stdout.strip()
+            return HostStatus(
+                power_state=HostPowerState.NOTEXIST, public_ip=None, raw_power="", vm_size=None
+            )
+        payload: dict[str, str | None] = json.loads(result.stdout or "{}")
+        raw = (payload.get("power") or "").strip()
         power = _POWER_MAP.get(raw, HostPowerState.OTHER)
         public_ip = self._public_ip(spec) if power is HostPowerState.RUNNING else None
-        return HostStatus(power_state=power, public_ip=public_ip, raw_power=raw)
+        return HostStatus(
+            power_state=power, public_ip=public_ip, raw_power=raw, vm_size=payload.get("size")
+        )
 
     def create(self, spec: HostSpec) -> None:
         """Cold-provision: create the resource group + a tagged VM. BILLABLE."""

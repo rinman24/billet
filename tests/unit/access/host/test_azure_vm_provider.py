@@ -1,6 +1,7 @@
 """Tests for AzureVmHostProvider — argv spies, state mapping, and security invariants."""
 
 from collections.abc import Callable
+import json
 
 import pytest
 
@@ -36,34 +37,61 @@ def test_status_notexist_when_vm_show_fails() -> None:
     status = provider.status(SPEC)
     assert status.power_state is HostPowerState.NOTEXIST
     assert status.public_ip is None
+    assert status.vm_size is None
 
 
 def test_status_running_includes_public_ip() -> None:
     def handler(argv: list[str]) -> CompletedProcess:
-        if "powerState" in argv:
-            return completed(stdout="VM running\n")
         if "publicIps" in argv:
             return completed(stdout="20.0.0.5\n")
-        return completed()
+        return completed(stdout=json.dumps({"power": "VM running", "size": "Standard_D4s_v5"}))
 
     provider, _ = _provider(handler)
     status = provider.status(SPEC)
     assert status.power_state is HostPowerState.RUNNING
     assert status.public_ip == "20.0.0.5"
+    assert status.vm_size == "Standard_D4s_v5"
 
 
 def test_status_deallocated_has_no_ip() -> None:
-    provider, _ = _provider(lambda _argv: completed(stdout="VM deallocated\n"))
+    provider, _ = _provider(
+        lambda _argv: completed(
+            stdout=json.dumps({"power": "VM deallocated", "size": "Standard_D4s_v5"})
+        )
+    )
     status = provider.status(SPEC)
     assert status.power_state is HostPowerState.DEALLOCATED
     assert status.public_ip is None
+    assert status.vm_size == "Standard_D4s_v5"
 
 
 def test_status_unknown_state_preserves_raw_power() -> None:
-    provider, _ = _provider(lambda _argv: completed(stdout="VM starting\n"))
+    provider, _ = _provider(
+        lambda _argv: completed(
+            stdout=json.dumps({"power": "VM starting", "size": "Standard_D4s_v5"})
+        )
+    )
     status = provider.status(SPEC)
     assert status.power_state is HostPowerState.OTHER
     assert status.raw_power == "VM starting"
+
+
+def test_status_null_size_yields_none() -> None:
+    provider, _ = _provider(
+        lambda _argv: completed(stdout=json.dumps({"power": "VM deallocated", "size": None}))
+    )
+    status = provider.status(SPEC)
+    assert status.vm_size is None
+
+
+def test_status_issues_single_vm_show_for_non_running_host() -> None:
+    provider, runner = _provider(
+        lambda _argv: completed(
+            stdout=json.dumps({"power": "VM deallocated", "size": "Standard_D4s_v5"})
+        )
+    )
+    provider.status(SPEC)
+    assert len([c for c in runner.commands() if c.startswith("az vm show")]) == 1
 
 
 # --- mutating control-plane ops ----------------------------------------------------

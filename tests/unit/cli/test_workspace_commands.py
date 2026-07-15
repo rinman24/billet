@@ -5,13 +5,14 @@ the full command path (config parse -> host plan/gate -> workspace plan/apply) w
 invoking ``az`` / ``ssh`` / ``os.execvp``.
 """
 
+from collections.abc import Sequence
 import json
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from billet.cli import workspace_commands as wc
+from billet.cli import _ui, workspace_commands as wc
 from billet.cli.app import app
 from billet.contracts import HostPowerState, HostStatus
 from billet.shared.errors import HostOperationError
@@ -114,6 +115,82 @@ def test_ls_reports_running_state(monkeypatch: pytest.MonkeyPatch, config_file: 
     assert result.exit_code == 0
     assert "gswa-backend" in result.output
     assert "running" in result.output
+
+
+def test_ls_probes_each_host_exactly_once(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    # The header power/size/ip probe: exactly one provider.status per host in _CONFIG.
+    prov, _, _, _ = _install(monkeypatch)
+    result = runner.invoke(app, ["ls", "--config", str(config_file)])
+    assert result.exit_code == 0
+    assert prov.calls.count("status") == 1  # one [hosts.*] table
+
+
+def test_ls_probes_every_host_including_non_managing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The header probe is orthogonal to ADR-0004: even a non-managing host is probed once.
+    path = tmp_path / "config.toml"
+    path.write_text(_CONFIG + _ADOPTED_HOST)
+    prov, _, _, _ = _install(monkeypatch, container=FakeContainerAccess(running=True))
+    result = runner.invoke(app, ["ls", "--config", str(path)])
+    assert result.exit_code == 0
+    assert prov.calls.count("status") == 2  # devbox + fleet
+
+
+def test_ls_notexist_host_does_not_crash(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    _install(monkeypatch, provider=FakeHostProvider(HostStatus(HostPowerState.NOTEXIST, None, "")))
+    result = runner.invoke(app, ["ls", "--config", str(config_file)])
+    assert result.exit_code == 0
+    assert "gswa-backend" in result.output
+
+
+def _capture_ls_groups(monkeypatch: pytest.MonkeyPatch) -> list[_ui.LsHostGroup]:
+    """Intercept the groups ``ls`` builds by stubbing the public render step."""
+    captured: list[_ui.LsHostGroup] = []
+
+    def _render(groups: Sequence[_ui.LsHostGroup], console: object = None) -> None:
+        captured.extend(groups)
+
+    monkeypatch.setattr(_ui, "render_ls", _render)
+    return captured
+
+
+def test_ls_shows_live_vm_size_over_config(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    # A live probe wins over the configured size; the header power/ip come from the probe.
+    captured = _capture_ls_groups(monkeypatch)
+    _install(
+        monkeypatch,
+        provider=FakeHostProvider(
+            HostStatus(HostPowerState.RUNNING, "20.0.0.5", "up", vm_size="Standard_D8s_v5")
+        ),
+    )
+    result = runner.invoke(app, ["ls", "--config", str(config_file)])
+    assert result.exit_code == 0
+    devbox = next(group for group in captured if group.key == "devbox")
+    assert devbox.vm_size == "Standard_D8s_v5"  # live, not the configured Standard_D4s_v4
+    assert devbox.power_state is HostPowerState.RUNNING
+    assert devbox.public_ip == "20.0.0.5"
+
+
+def test_ls_falls_back_to_config_vm_size_when_probe_is_blank(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    captured = _capture_ls_groups(monkeypatch)
+    _install(
+        monkeypatch,
+        provider=FakeHostProvider(HostStatus(HostPowerState.DEALLOCATED, None, "", vm_size=None)),
+    )
+    result = runner.invoke(app, ["ls", "--config", str(config_file)])
+    assert result.exit_code == 0
+    devbox = next(group for group in captured if group.key == "devbox")
+    assert devbox.vm_size == "Standard_D4s_v4"  # the configured size, since the probe was blank
+    assert devbox.public_ip is None
 
 
 def test_ls_reports_unreachable_host_without_hanging_or_failing(
