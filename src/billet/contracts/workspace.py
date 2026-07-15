@@ -130,10 +130,15 @@ class SshConfigBlock:
 
 
 class SourceAccess(Protocol):
-    """Places the repo's source on the Host (agent-forwarded clone / fetch)."""
+    """Places the repo's source on the Host (agent-forwarded clone, else fetch + fast-forward)."""
 
     def ensure_clone(self, spec: WorkspaceSpec, remote: RemoteHost) -> None:
-        """Clone ``repo_url`` into ``repo_dir`` on the host, or fetch if already present."""
+        """Clone ``repo_url`` into ``repo_dir``, else fetch and non-destructively fast-forward.
+
+        When the repo is already present the checked-out branch is advanced to its upstream
+        only when that is safe (clean tracked files, an upstream, a genuine fast-forward);
+        any adopted checkout is left untouched with a warning (ADR-0007).
+        """
         ...
 
 

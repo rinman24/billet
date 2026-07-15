@@ -100,13 +100,15 @@ Two keys carry the tricks:
 - `host_bootstrap_cmd` — runs in `repo_dir` on the Host before every `compose up`.
   `cp -n .devcontainer/.env.example .devcontainer/.env` wires the real
   `authorized_keys` path on the very first cold start with zero manual steps, and never
-  clobbers a hand-edited `.env` (`-n`).
+  clobbers a hand-edited `.env` (`-n`). Re-running `start` fetches and, when it is safe to
+  do so, fast-forwards the Host checkout to upstream (ADR-0007) — this untracked `.env` is
+  not treated as a dirty tree, so it always survives the advance.
 
 Then:
 
 ```bash
 billet add my-repo              # validate the block (port uniqueness, host exists, …)
-billet start my-repo --verify   # clone on the Host, compose up --build, postCreate, verify_cmd
+billet start my-repo --verify   # clone (or fetch + safe fast-forward), compose up --build, postCreate, verify_cmd
 billet ssh-config               # re-render ~/.ssh/config.d/billet.conf with the new aliases
 billet connect my-repo          # ProxyJump in, land in the tmux session
 ```

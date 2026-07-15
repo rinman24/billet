@@ -169,7 +169,7 @@ def test_workspace_phases_carry_labels_and_the_compose_bar() -> None:
     )
     phases = _ui.workspace_phases(plan, spec)
     assert [phase.label for phase in phases] == [
-        "clone / fetch genshift/api",
+        "clone / fast-forward genshift/api",
         "docker compose up · build",
         "personal bootstrap",
         "postCreate",

@@ -87,7 +87,7 @@ class WorkspaceManager:
         steps = [
             WorkspacePlanStep(
                 WorkspaceStepKind.ENSURE_SOURCE,
-                f"clone/fetch {spec.repo_url} into {spec.repo_dir} on host '{spec.host}'",
+                f"clone / fast-forward {spec.repo_url} into {spec.repo_dir} on host '{spec.host}'",
             ),
             WorkspacePlanStep(
                 WorkspaceStepKind.COMPOSE_UP,
