@@ -26,6 +26,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 from billet.contracts import (
+    HostPowerState,
     HostSpec,
     Plan,
     PlanStep,
@@ -490,12 +491,17 @@ class LsWorkspaceRow:
 class LsHostGroup:
     """One host section of the ls view: the rack and the berths posted into it.
 
-    ``vm_size`` is None for an adopted host whose table carries no provisioning keys;
-    the header renders a placeholder dash in its place.
+    ``vm_size`` is the resolved size — the live-probed hardware size first, falling back
+    to the configured size — and is None only when neither exists (an adopted host whose
+    table carries no provisioning keys and whose live probe found nothing); the header
+    renders a placeholder dash in its place. ``power_state`` and ``public_ip`` come from
+    the same live probe; the public IP is shown only while the host is running.
     """
 
     key: str
     vm_size: str | None
+    power_state: HostPowerState
+    public_ip: str | None
     manages_workspaces: bool
     rows: tuple[LsWorkspaceRow, ...]
 
@@ -533,9 +539,27 @@ def _rack_cells(posted: int) -> Text:
     return cells
 
 
+# A host's power state renders as one word in a brand style. The `running` word is mint
+# (`done`) — the host is up/healthy — deliberately distinct from a workspace's magenta
+# running dot; the two must not be unified.
+_POWER_STYLE: dict[HostPowerState, tuple[str, str]] = {
+    HostPowerState.RUNNING: ("running", "done"),
+    HostPowerState.DEALLOCATED: ("deallocated", "caution"),
+    HostPowerState.STOPPED: ("stopped", "caution"),
+    HostPowerState.NOTEXIST: ("not created", "meta"),
+    HostPowerState.OTHER: ("unknown", "meta"),
+}
+
+
 def _ls_host_line(group: LsHostGroup) -> Text:
     size = group.vm_size.lower() if group.vm_size else no_size_placeholder()
     line = Text.assemble((group.key, "heading"), "   ", (size, "meta"))
+    word, style = _POWER_STYLE[group.power_state]
+    line.append(f" {glyphs().info} ", style="meta")
+    line.append(word, style=style)
+    if group.public_ip:
+        line.append(f" {glyphs().info} ", style="meta")
+        line.append(group.public_ip, style="meta")
     if not group.manages_workspaces:
         line.append(f" {glyphs().info} manages no workspaces", style="dim")
         return line

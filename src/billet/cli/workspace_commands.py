@@ -26,6 +26,7 @@ from billet.cli import _planio, _ui
 from billet.contracts import (
     HostProvider,
     HostSpec,
+    HostStatus,
     RemoteHost,
     SshConfigBlock,
     WorkspaceSpec,
@@ -151,7 +152,11 @@ def add(key: _KeyArgument, config: _ConfigOption = None) -> None:
 
 
 def ls(config: _ConfigOption = None, as_json: _JsonOption = False) -> None:
-    """List registered Workspaces and whether each container is running."""
+    """List registered Workspaces and whether each container is running.
+
+    The host header carries a live power/size/ip probe (one ``provider.status`` call per
+    host, managing or not — orthogonal to the ADR-0004 workspace probe below).
+    """
     try:
         registry = _registry(config)
         manager = workspace_manager_factory()
@@ -176,8 +181,14 @@ def ls(config: _ConfigOption = None, as_json: _JsonOption = False) -> None:
             if registry.host(ws.host).manages_workspaces
         ]
         statuses = {status.key: status for status in manager.status_all(probeable)}
+        # The header power/size/ip probe: exactly one status call per host (a host that
+        # fails to probe returns NOTEXIST, not an exception, so ls still renders).
+        provider = provider_factory(registry.global_config().subscription_id)
+        host_statuses = {
+            host_key: provider.status(registry.host(host_key)) for host_key in registry.host_keys()
+        }
         groups = [
-            _ls_group(registry.host(host_key), workspaces, statuses)
+            _ls_group(registry.host(host_key), workspaces, statuses, host_statuses[host_key])
             for host_key in registry.host_keys()
         ]
         if as_json:
@@ -200,6 +211,7 @@ def _ls_group(
     host: HostSpec,
     workspaces: Sequence[WorkspaceSpec],
     statuses: dict[str, WorkspaceStatus],
+    host_status: HostStatus,
 ) -> _ui.LsHostGroup:
     rows = tuple(
         _ui.LsWorkspaceRow(
@@ -213,7 +225,9 @@ def _ls_group(
     )
     return _ui.LsHostGroup(
         key=host.key,
-        vm_size=host.vm_size,
+        vm_size=host_status.vm_size or host.vm_size,  # live first, config fallback, else None
+        power_state=host_status.power_state,
+        public_ip=host_status.public_ip,
         manages_workspaces=host.manages_workspaces,
         rows=rows,
     )

@@ -24,6 +24,7 @@ from billet.cli._ui import (
     render_error,
 )
 from billet.contracts import (
+    HostPowerState,
     Plan,
     PlanStep,
     StepKind,
@@ -344,13 +345,22 @@ def _ls_groups() -> list[_ui.LsHostGroup]:
         _ui.LsHostGroup(
             key="devbox",
             vm_size="Standard_D4s_v4",
+            power_state=HostPowerState.RUNNING,
+            public_ip="20.51.132.7",
             manages_workspaces=True,
             rows=(
                 _ui.LsWorkspaceRow(key="api", state="running", alias="api.devbox", port=2222),
                 _ui.LsWorkspaceRow(key="web", state="stopped", alias="web.devbox", port=2224),
             ),
         ),
-        _ui.LsHostGroup(key="fleet", vm_size="Standard_D4s_v5", manages_workspaces=False, rows=()),
+        _ui.LsHostGroup(
+            key="fleet",
+            vm_size="Standard_D4s_v5",
+            power_state=HostPowerState.RUNNING,
+            public_ip=None,
+            manages_workspaces=False,
+            rows=(),
+        ),
     ]
 
 
@@ -371,11 +381,53 @@ def test_render_ls_tty_groups_hosts_and_marks_states() -> None:
     text = console.export_text()
     assert "devbox" in text
     assert "standard_d4s_v4" in text  # vm size lowercased per the voice
+    # The header interleaves the live power word and public ip between size and the rack.
+    assert "standard_d4s_v4 · running · 20.51.132.7" in text
     assert "● api" not in text  # glyph and key live in separate aligned cells
     assert "●" in text and "○" in text  # state dots for running and stopped
     assert ":2222" in text
     assert "manages no workspaces" in text  # the non-managing host header
     assert "2 / 6" in text  # posted / rack total
+
+
+def test_render_ls_tty_non_managing_host_shows_power_but_no_rack() -> None:
+    console = _terminal_console()
+    _ui.render_ls(_ls_groups(), console=console)
+    text = console.export_text()
+    # fleet: {size} · running · manages no workspaces, no ip (public_ip None), no rack.
+    assert "standard_d4s_v5 · running · manages no workspaces" in text
+
+
+def test_render_ls_tty_deallocated_host_shows_no_ip() -> None:
+    # A deallocated host has released its public ip (probe returns None), so the header
+    # is just {size} · deallocated with no ip segment.
+    console = _terminal_console()
+    groups = [
+        _ui.LsHostGroup(
+            key="staging",
+            vm_size="Standard_D4s_v5",
+            power_state=HostPowerState.DEALLOCATED,
+            public_ip=None,
+            manages_workspaces=True,
+            rows=(_ui.LsWorkspaceRow(key="api", state="stopped", alias="api.s", port=2222),),
+        )
+    ]
+    _ui.render_ls(groups, console=console)
+    text = console.export_text()
+    assert "standard_d4s_v5 · deallocated" in text
+    assert "·  ·" not in text  # no empty ip segment between power and the rack
+
+
+def test_render_ls_running_power_word_is_mint() -> None:
+    # A HOST's running word is mint (`done`), distinct from a WORKSPACE's magenta running dot.
+    console = _terminal_console()
+    _ui.render_ls(_ls_groups(), console=console)
+    styled = console.export_text(styles=True)
+    mint = "\x1b[38;2;63;210;190m"  # `done`  → #3FD2BE
+    magenta = "\x1b[38;2;192;92;224m"  # `running` → #C05CE0
+    assert f"{mint}running\x1b[0m" in styled  # the host power word, mint
+    assert f"{magenta}running\x1b[0m" in styled  # the workspace dot's word stays magenta
+    assert "\x1b[38;2;131;115;144m20.51.132.7\x1b[0m" in styled  # the public ip, styled meta
 
 
 def test_render_ls_tty_renders_placeholder_for_a_host_without_vm_size() -> None:
@@ -385,6 +437,8 @@ def test_render_ls_tty_renders_placeholder_for_a_host_without_vm_size() -> None:
         _ui.LsHostGroup(
             key="adopted",
             vm_size=None,
+            power_state=HostPowerState.NOTEXIST,
+            public_ip=None,
             manages_workspaces=True,
             rows=(_ui.LsWorkspaceRow(key="api", state="running", alias="api.a", port=2222),),
         )
@@ -392,6 +446,7 @@ def test_render_ls_tty_renders_placeholder_for_a_host_without_vm_size() -> None:
     _ui.render_ls(groups, console=console)
     text = console.export_text()
     assert "adopted   —" in text
+    assert "not created" in text  # NOTEXIST power word
     assert "None" not in text
 
 
@@ -401,6 +456,8 @@ def test_render_ls_unreachable_hint_piped() -> None:
         _ui.LsHostGroup(
             key="devbox",
             vm_size="Standard_D4s_v4",
+            power_state=HostPowerState.RUNNING,
+            public_ip="20.51.132.7",
             manages_workspaces=True,
             rows=(
                 _ui.LsWorkspaceRow(key="api", state="unreachable", alias="api.devbox", port=2222),
