@@ -573,6 +573,70 @@ def test_ls_annotates_a_non_managing_host_but_still_lists_the_rest(
     assert "invalid" in on_fleet  # the fleet-host workspace flagged, not probed
 
 
+# Every host is non-managing, so `probeable` is empty — no workspace can ever be probed.
+_NON_MANAGING_HOST_ONLY_CONFIG = """
+[billet]
+subscription_id = "sub-123"
+
+[hosts.fleet]
+resource_group = "GSWA-FLEET-HOST-RG"
+vm_name = "gswa-fleet-host"
+location = "westus3"
+admin_user = "azureuser"
+manages_workspaces = false
+
+[workspaces.on-fleet]
+host = "fleet"
+repo_url = "git@github.com:my-org/on-fleet.git"
+repo_dir = "on-fleet"
+container_ssh_port = 2224
+host_alias = "gswa-fleet-host"
+container_alias = "on-fleet-container"
+"""
+
+
+@pytest.fixture
+def non_managing_only_config(tmp_path: Path) -> Path:
+    path = tmp_path / "config.toml"
+    path.write_text(_NON_MANAGING_HOST_ONLY_CONFIG)
+    return path
+
+
+def _record_phase_updates(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Intercept every ``PlanningStatus.update`` call so tests can assert on phase text."""
+    calls: list[str] = []
+    original = _ui.PlanningStatus.update
+
+    def _update(self: _ui.PlanningStatus, text: str) -> None:
+        calls.append(text)
+        original(self, text)
+
+    monkeypatch.setattr(_ui.PlanningStatus, "update", _update)
+    return calls
+
+
+def test_ls_never_advances_to_the_berths_phase_when_no_host_manages_workspaces(
+    monkeypatch: pytest.MonkeyPatch, non_managing_only_config: Path
+) -> None:
+    # `probeable` is empty when no host manages workspaces, so the transient status line
+    # must never advance past the header probe — phase 2 has nothing left to probe.
+    calls = _record_phase_updates(monkeypatch)
+    _install(monkeypatch)
+    result = runner.invoke(app, ["ls", "--config", str(non_managing_only_config)])
+    assert result.exit_code == 0
+    assert wc._LS_PHASE_BERTHS not in calls  # pyright: ignore[reportPrivateUsage]
+
+
+def test_ls_advances_to_the_berths_phase_when_a_host_manages_workspaces(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    calls = _record_phase_updates(monkeypatch)
+    _install(monkeypatch, container=FakeContainerAccess(running=True))
+    result = runner.invoke(app, ["ls", "--config", str(config_file)])
+    assert result.exit_code == 0
+    assert calls.count(wc._LS_PHASE_BERTHS) == 1  # pyright: ignore[reportPrivateUsage]
+
+
 def test_ls_json_emits_machine_readable_records(
     monkeypatch: pytest.MonkeyPatch, config_file: Path
 ) -> None:
@@ -589,6 +653,17 @@ def test_ls_json_emits_machine_readable_records(
             "port": 2222,
         }
     ]
+
+
+def test_ls_json_output_has_no_status_chrome(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    # --- json is machine-readable: the phase-status line must never leak into stdout, so the
+    # whole output parses as JSON with no stray spinner/ansi characters.
+    _install(monkeypatch, container=FakeContainerAccess(running=True))
+    result = runner.invoke(app, ["ls", "--config", str(config_file), "--json"])
+    assert result.exit_code == 0
+    json.loads(result.stdout)  # parses clean — no stray chrome around the records
 
 
 def test_connect_prints_status_before_exec(
