@@ -7,7 +7,11 @@
     // billet uses the default in-repo .venv (gitignored), which the bind mount shadows,
     // so populate it once at container creation. `make install` does the same thing if
     // you bring the container up with bare `docker compose up` instead of VS Code/billet.
-    "postCreateCommand": "uv sync --frozen",
+    // The chezmoi step pulls rinman24/dotfiles (tmux + TPM included) on a direct devcontainer
+    // open — mirroring billet's global personal_bootstrap_cmd so both start paths converge.
+    // Idempotent: `update` on an existing checkout, else first-time `init`; chezmoi is baked
+    // into the image (Dockerfile) and lands on PATH via $HOME/.local/bin here.
+    "postCreateCommand": "uv sync --frozen && export PATH=\"$HOME/.local/bin:$PATH\" && (chezmoi update --apply || chezmoi init --apply rinman24)",
     "customizations": {
         "vscode": {
             "settings": {
