@@ -66,6 +66,22 @@ Then merge the two snippets:
   bind mount is StrictModes-clean), and the `COPY` of `sshd.conf` into
   `/etc/ssh/sshd_config.d/`.
 
+### Dotfiles: chezmoi + tmux/TPM (the standard)
+
+Workspaces standardize on [chezmoi](https://chezmoi.io)-managed dotfiles. Bake the chezmoi
+binary into the dev-container image (billet's own Dockerfile pins it into `/usr/local/bin`),
+and pull the dotfiles at container start with `chezmoi init --apply rinman24` (first time) or
+`chezmoi update --apply` (thereafter). billet's global `personal_bootstrap_cmd` does exactly
+this on every `billet start`; billet's own `devcontainer.json` `postCreateCommand` repeats it
+so a direct devcontainer open gets dotfiles too. Both paths converge on the same
+[`rinman24/dotfiles`](https://github.com/rinman24/dotfiles) repo, which owns tmux and TPM
+(Tmux Plugin Manager) via its `.chezmoiexternal.toml` + run scripts — so there is no separate
+TPM install step and no tmux config baked into any image.
+
+Caveat: the dotfiles repo's `catppuccin/tmux` status-bar theme conflicts with billet's
+per-Workspace `status_color` injection (both drive the tmux status bar). Pick one — either
+drop `status_color` from the Workspace block, or don't load catppuccin/tmux.
+
 Sanity checks before merging the PR:
 
 - `devcontainer.json` declares `service`, `dockerComposeFile`, `workspaceFolder`, and

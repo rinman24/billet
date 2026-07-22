@@ -29,7 +29,11 @@ default_host = "devbox"
 # on the Host or in the container. Note: an sshd login shell does not inherit the
 # service's compose-provided environment (`environment:` / `env_file:`); don't rely on
 # those variables here. Empty (the default) disables it.
-# personal_bootstrap_cmd = "git clone git@github.com:me/dotfiles ~/dotfiles && bash ~/dotfiles/install.sh"
+# The standardized form uses chezmoi (baked into billet's image; add it to your own repo's
+# devcontainer image too). It pulls the rinman24/dotfiles repo, which also installs TPM (Tmux
+# Plugin Manager) + tmux plugins from its .chezmoiexternal.toml + run scripts — so no separate
+# TPM step is needed. Idempotent: `update` on an existing checkout, else first-time `init`.
+# personal_bootstrap_cmd = "export PATH=\"$HOME/.local/bin:$PATH\"; chezmoi update --apply || chezmoi init --apply rinman24"
 #
 # Optional. A shell command billet runs LOCALLY (on your machine) at `billet start` time to
 # fetch ONE central Claude Code OAuth token. Its STDOUT is captured as the token and injected

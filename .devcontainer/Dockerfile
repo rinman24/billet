@@ -97,6 +97,17 @@ RUN set -eux; \
 # same-named upstream instead of erroring.
 RUN git config --system push.autoSetupRemote true
 
+# chezmoi (dotfiles manager). Installed here as root into /usr/local/bin — on PATH for the
+# runtime `dev` user — but NOT run at build time: the actual dotfiles pull runs at container
+# start, either via billet's global personal_bootstrap_cmd (every Workspace on `billet start`)
+# or, for a direct devcontainer open, via devcontainer.json's postCreateCommand
+# (`chezmoi update --apply || chezmoi init --apply rinman24`). Both paths converge on the
+# rinman24/dotfiles repo, which also owns tmux + TPM (Tmux Plugin Manager) via its
+# .chezmoiexternal.toml + run scripts — so no tmux config or TPM step is baked here. Pinned
+# to the version the operator runs locally, same digest-pinned reproducibility as uv/nvim above.
+RUN sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin -t v2.71.0 \
+    && chezmoi --version
+
 # Non-root `dev` user (uid/gid 1000). Required, not cosmetic: Claude Code refuses
 # `--dangerously-skip-permissions` as root, and uid 1000 matches the VM host owner
 # (azureuser) so the /workspace bind mount needs no chown. Passwordless sudo is the
