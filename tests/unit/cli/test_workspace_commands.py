@@ -403,7 +403,7 @@ def test_connect_execs_tmux_argv(monkeypatch: pytest.MonkeyPatch, config_file: P
     assert argv[-1] == (
         "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 TERM=xterm-256color tmux "
         "set -g @billet_workspace gswa-backend \\; set -g @billet_host devbox \\; "
-        "new-session -A -s main bash -l"
+        "new-session -A -s gswa-backend bash -l"
     )
 
 
@@ -678,4 +678,4 @@ def test_connect_prints_status_before_exec(
     result = runner.invoke(app, ["connect", "gswa-backend", "--config", str(config_file)])
     assert result.exit_code == 0
     assert "connecting to gswa-backend" in result.output
-    assert "tmux main" in result.output
+    assert "tmux gswa-backend" in result.output
