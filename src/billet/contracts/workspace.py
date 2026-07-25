@@ -22,9 +22,10 @@ class WorkspaceSpec:
     container definition is read from ``devcontainer.json`` into :class:`DevcontainerFacts`.
 
     ``status_color`` is likewise operator intent — the optional hex brand color billet
-    paints the Workspace's tmux status bar with on ``connect`` (its *status branding*), so an
-    operator can tell otherwise-identical container shells apart. It belongs here, not in
-    :class:`DevcontainerFacts`: the repo's container knows nothing about how billet brands it.
+    *publishes* to the Workspace's tmux session as ``@billet_color`` on ``connect``, for the
+    operator's own tmux configuration to render however it likes (ADR-0008). billet writes no
+    presentation option itself. It belongs here, not in :class:`DevcontainerFacts`: the repo's
+    container knows nothing about how the operator brands it.
     """
 
     key: str

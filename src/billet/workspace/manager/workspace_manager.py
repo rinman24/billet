@@ -245,16 +245,19 @@ class WorkspaceManager:
         and is all tmux needs; the pin applies only to this remote command, so the
         operator's local terminal is untouched.
 
-        The session's status bar is *branded* via a ``set -g`` prelude
-        (:class:`TmuxStatusEngine`): the Workspace key is always shown on the left, and the
-        optional ``status_color`` tints the bar so an operator can tell otherwise-identical
-        container shells apart. The prelude runs on the same ``tmux`` invocation *ahead* of
-        ``new-session`` because ``status-*`` are session globals and the attaching
-        ``new-session -A`` short-circuits to an attach (never re-applying trailing options)
-        when the session already exists — so branding must precede it to cover both the
-        create and the re-attach path.
+        The Workspace's *identity* is published into the session as tmux user options via a
+        ``set -g`` prelude (:class:`TmuxStatusEngine`): ``@billet_workspace``,
+        ``@billet_host``, and ``@billet_color`` when a ``status_color`` is set. That is data
+        only — billet writes no presentation option and renders nothing, so the operator's
+        adopted tmux configuration decides where identity appears (ADR-0008). The prelude
+        runs on the same ``tmux`` invocation *ahead* of ``new-session`` because these are
+        session globals and the attaching ``new-session -A`` short-circuits to an attach
+        (never re-applying trailing options) when the session already exists — so publication
+        must precede it to cover both the create and the re-attach path.
         """
-        prelude = self._tmux_status.render_prelude(label=spec.key, color=spec.status_color)
+        prelude = self._tmux_status.render_prelude(
+            workspace=spec.key, host=spec.host, color=spec.status_color
+        )
         remote_command = (
             f"cd {shlex.quote(facts.workspace_folder)} && "
             "exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 TERM=xterm-256color "
