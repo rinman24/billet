@@ -1,90 +1,79 @@
-"""TmuxStatusEngine — render the tmux *status branding* prelude for ``billet connect``.
+"""TmuxStatusEngine — render the tmux *identity publication* prelude for ``billet connect``.
 
-*Status branding* is the color-plus-label billet stamps onto a Workspace's tmux status bar
-so an operator can tell otherwise-identical container shells apart at a glance: a **label**
-(the Workspace key, always shown on the left) and an optional **brand color** (the
-status-bar background). This engine is pure text rendering — no side effects — so its exact,
-byte-for-byte output is exhaustively unit-testable.
+*Publication* means billet writes a Workspace's identity into the tmux session as **data**
+and renders nothing (ADR-0008). Three values are published — the Workspace key, the Host
+key, and the optional ``status_color`` hex — and the operator's adopted tmux configuration
+decides whether, where, and how any of them appear. billet never writes ``status-style``,
+``status-left``, ``status-right``, ``status-format``, ``status-*-length`` or
+``window-status-*``: those belong to the theme and to the operator who chose it. This engine
+is pure text rendering — no side effects — so its exact, byte-for-byte output is
+exhaustively unit-testable.
+
+The carrier is tmux's **user-option** namespace, its documented extension point and the
+reason no capability probe is needed. Plain ``set`` of an option tmux does not know is an
+error; ``set @foo`` always succeeds, on every tmux since 3.0, whether or not anything reads
+it. Reads are equally forgiving: an unset user option expands to the empty string with no
+error (``X#{@nope}Y`` -> ``XY``), so a consumer that interpolates ``#{@billet_color}`` on a
+Workspace with no color simply gets nothing. Publication therefore degrades for free in both
+directions — billet writing options nobody reads, and dotfiles reading options billet did
+not write.
 
 The rendered *prelude* is the run of ``set -g`` commands that ``connect`` inserts between
-``tmux `` and ``new-session ...``. It is emitted *before* ``new-session`` on purpose:
-``status-style`` / ``status-left`` are session **globals**, and ``connect`` attaches with
+``tmux `` and ``new-session ...``. Its position is unchanged from the presentation era and
+for the same reason: these are session **globals**, and ``connect`` attaches with
 ``new-session -A`` (attach-if-exists). When a matching session already exists, ``-A``
 short-circuits straight to an attach and never re-applies options that trail it — so the
-globals must be set on the same ``tmux`` invocation *ahead* of ``new-session`` to brand both
-the create path and the re-attach path.
+globals must be set on the same ``tmux`` invocation *ahead* of ``new-session`` to publish on
+both the create path and the re-attach path.
 
-``status-left`` is a tmux **FORMAT** string: tmux interprets ``#`` sequences (``#H``,
-``#{...}``) inside it, so a literal ``#`` in the label must be doubled to ``##`` or tmux
-would swallow it. ``status-style`` is **not** a format string — it is a style spec whose
-``#`` introduces a hex color (``bg=#rrggbb``) — so its ``#`` must be left untouched. Every
-option *value* is additionally ``shlex.quote``-d, because the prelude rides through a remote
-login shell before tmux ever parses it.
+Values are published verbatim, with one and only one transformation: ``shlex.quote``, because
+the prelude rides through a remote login shell before tmux ever parses it. In particular the
+hex color keeps its leading ``#``. A user option's *value* is not a format string — tmux
+format-expands the string a consumer writes, not the option it interpolates — so there is no
+``#`` -> ``##`` escaping here, and adding it would be a bug: ``set -g @billet_color
+'#C05CE0'`` read back as ``#[bg=#{@billet_color}]`` expands to ``#[bg=#C05CE0]`` and paints,
+whereas a doubled ``##{@billet_color}`` collapses to a literal ``#`` and the option is never
+interpolated at all (verified on tmux 3.7b). Consumers should read ``#{@billet_workspace}``;
+``#{E:@billet_workspace}`` re-expands the published value as a format and is deliberately
+not part of the contract.
 """
 
 import shlex
 
-_LUMINANCE_THRESHOLD = 128
-_SHORT_HEX_DIGITS = 3
 _SEP = " \\; "
 
 
 class TmuxStatusEngine:
-    """Renders the tmux status-branding prelude for one Workspace."""
+    """Renders the tmux identity-publication prelude for one Workspace."""
 
-    def render_prelude(self, *, label: str, color: str | None) -> str:
+    def render_prelude(self, *, workspace: str, host: str, color: str | None) -> str:
         r"""Render the ``set -g`` prelude to insert before ``new-session``.
 
         Parameters
         ----------
-        label : str
-            The Workspace identity shown on the status bar's left. Always emitted, so the
-            container stays identifiable even when no brand color is set.
+        workspace : str
+            The Workspace key, published as ``@billet_workspace``. Always emitted.
+        host : str
+            The Host key the Workspace is placed on, published as ``@billet_host``. Always
+            emitted.
         color : str | None
-            The optional hex brand color used as the status-bar background, or ``None`` to
-            leave the bar at tmux's default style.
+            The optional hex brand color, published verbatim (leading ``#`` included) as
+            ``@billet_color``. When ``None`` the ``set -g`` is omitted entirely, so the
+            option stays unset and expands to the empty string in a consumer's format —
+            which is why no sentinel value is needed for "no color".
 
         Returns
         -------
         str
             The chained ``set -g`` commands, each separated *and* terminated by `` \; ``
             (space-backslash-semicolon-space) so the caller can concatenate the result
-            directly ahead of ``new-session``. When ``color`` is set the order is
-            ``status-style``, ``status-left``, ``status-left-length``; otherwise
-            ``status-style`` is omitted.
+            directly ahead of ``new-session``. The order is ``@billet_workspace``,
+            ``@billet_host``, then ``@billet_color`` when it is set.
         """
-        commands: list[str] = []
+        commands = [
+            f"set -g @billet_workspace {shlex.quote(workspace)}",
+            f"set -g @billet_host {shlex.quote(host)}",
+        ]
         if color is not None:
-            style = f"bg={color},fg={self.readable_fg(color)}"
-            commands.append(f"set -g status-style {shlex.quote(style)}")
-        escaped_label = label.replace("#", "##")
-        commands.append(f"set -g status-left {shlex.quote(f' {escaped_label} ')}")
-        commands.append(f"set -g status-left-length {shlex.quote(str(len(label) + 2))}")
+            commands.append(f"set -g @billet_color {shlex.quote(color)}")
         return "".join(f"{command}{_SEP}" for command in commands)
-
-    def readable_fg(self, color: str) -> str:
-        """Return the legible foreground (``#000000``/``#ffffff``) for a hex background.
-
-        Uses integer Rec.601 perceived luminance,
-        ``lum = (r*299 + g*587 + b*114) // 1000``: black text on a light background
-        (``lum >= 128``), white text on a dark one.
-
-        Parameters
-        ----------
-        color : str
-            A hex color, ``#rgb`` or ``#rrggbb`` in any case. The three-digit form is
-            expanded by doubling each nibble (``#abc`` -> ``#aabbcc``).
-
-        Returns
-        -------
-        str
-            ``"#000000"`` when the background is light, ``"#ffffff"`` when it is dark.
-        """
-        digits = color.removeprefix("#")
-        if len(digits) == _SHORT_HEX_DIGITS:
-            digits = "".join(nibble * 2 for nibble in digits)
-        red = int(digits[0:2], 16)
-        green = int(digits[2:4], 16)
-        blue = int(digits[4:6], 16)
-        lum = (red * 299 + green * 587 + blue * 114) // 1000
-        return "#000000" if lum >= _LUMINANCE_THRESHOLD else "#ffffff"

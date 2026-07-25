@@ -235,21 +235,29 @@ def test_connect_target_builds_tty_tmux_argv_through_the_container_alias() -> No
     assert "gswa-container" in argv  # via the alias (no user@host)
     assert argv[-1] == (
         "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 TERM=xterm-256color tmux "
-        "set -g status-left ' gswa-backend ' \\; set -g status-left-length 14 \\; "
+        "set -g @billet_workspace gswa-backend \\; set -g @billet_host devbox \\; "
         "new-session -A -s main bash -l"
     )
 
 
-def test_connect_target_applies_status_color_to_the_status_bar() -> None:
+def test_connect_target_publishes_status_color_as_a_user_option() -> None:
     manager, *_ = _manager()
     spec = make_workspace_spec(status_color="#C05CE0")
     argv = manager.connect_target(spec, FACTS)
     assert argv[-1] == (
         "cd /app && exec env LC_ALL=C.UTF-8 LANG=C.UTF-8 TERM=xterm-256color tmux "
-        "set -g status-style 'bg=#C05CE0,fg=#000000' \\; "
-        "set -g status-left ' gswa-backend ' \\; set -g status-left-length 14 \\; "
+        "set -g @billet_workspace gswa-backend \\; set -g @billet_host devbox \\; "
+        "set -g @billet_color '#C05CE0' \\; "
         "new-session -A -s main bash -l"
     )
+
+
+def test_connect_target_writes_no_tmux_presentation_option() -> None:
+    # ADR-0008 rule 2: presentation belongs to the operator's adopted tmux config.
+    manager, *_ = _manager()
+    remote_command = manager.connect_target(make_workspace_spec(status_color="#C05CE0"), FACTS)[-1]
+    for option in ("status-style", "status-left", "status-right", "status-format", "window-status"):
+        assert option not in remote_command
 
 
 # --- status ------------------------------------------------------------------------
