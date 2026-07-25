@@ -8,6 +8,14 @@ status bar, and extends [ADR-0005](adr-0005-instance-lifecycle-ownership.md)'s "
 own" boundary from cloud infrastructure to operator-owned *configuration*. Decision only: no
 behavior changes with this ADR; implementation follows in separate PRs.
 
+Amended (2026-07-25): the operator's dotfiles no longer load catppuccin/tmux or any plugin
+manager — the status bar is a hand-rolled config
+([`rinman24/dotfiles`](https://github.com/rinman24/dotfiles) PR #14). The decision and all six
+rules are unaffected; the ownership boundary is theme-agnostic by construction, which is
+precisely what this amendment demonstrates. The catppuccin specifics in Context and
+Alternatives below are retained as the historical motivation — that collision is why the
+boundary was drawn, and the record is less useful without it.
+
 ## Context
 
 `billet connect` brands a Workspace's tmux status bar so an operator can tell otherwise
@@ -19,7 +27,8 @@ splices it into the same `tmux` invocation *ahead* of `new-session -A`; the per-
 The prelude's *position* is correct and stays. Live testing against tmux 3.7b confirms the
 reasoning already documented in `tmux_status_engine.py`: the config file is fully sourced
 before the client's command-line `set -g` commands run — on both the cold-start and the
-`new-session -A` re-attach path — and TPM sources plugins synchronously, so there is no race.
+`new-session -A` re-attach path — and any plugin manager the config invokes sources
+synchronously, so there is no race.
 billet always wins.
 
 Winning is the problem. The same testing, against real catppuccin checkouts, found exactly
@@ -31,9 +40,9 @@ one true collision and it is caused by billet writing an option the theme owns:
   the separators keep painting notches in the theme's old background color.
 - catppuccin v2 does **not** set `status-left`/`status-right`; it exposes ~70
   `@catppuccin_status_*` user options the operator composes. The operator's dotfiles
-  ([`rinman24/dotfiles`](https://github.com/rinman24/dotfiles)) set `status-left ""` and build
-  `status-right` from those modules — so `status-left` is deliberately vacated and billet's
-  label there is, today, non-destructive.
+  ([`rinman24/dotfiles`](https://github.com/rinman24/dotfiles)) at the time set `status-left ""`
+  and built `status-right` from those modules — so `status-left` was deliberately vacated and
+  billet's label there was non-destructive.
 
 This is not hypothetical. `docs/adopting-a-repo.md` currently tells operators: *"Pick one —
 either drop `status_color` from the Workspace block, or don't load catppuccin/tmux."* A
@@ -104,9 +113,9 @@ Six rules define the contract:
 
 ## Consequences
 
-- The `adopting-a-repo.md` "pick one" caveat can be deleted. billet and catppuccin stop
-  contesting `status-style`, and the separator-notch artifact disappears because the theme's
-  cached `@_ctp_status_bg` is never invalidated behind its back.
+- The `adopting-a-repo.md` "pick one" caveat can be deleted. billet contests no presentation
+  option with any theme, so no theme's cached state can be invalidated behind its back and the
+  separator-notch class of artifact cannot recur.
 - Provenance becomes checkable: `tmux show -g @billet_workspace` answers "what does billet
   think this session is?" in one line. Today, "the bar looks wrong" has no such probe.
 - `TmuxStatusEngine` stays pure, and its golden-string tests become *meaningful* rather than
@@ -115,7 +124,7 @@ Six rules define the contract:
 - The cost is real: **the consuming half of the contract lives in a second repo**
   (`rinman24/dotfiles`) with no CI, no import-linter, and no tests. Debugging a broken bar now
   spans two repositories, and neither one can validate the other.
-- The operator takes on a maintenance burden: a catppuccin module that interpolates
+- The operator takes on a maintenance burden: a status-bar segment that interpolates
   `#{@billet_*}` into tmux's format DSL, which has famously poor error messages and fails by
   rendering something subtly wrong rather than by erroring.
 - A new operator who has not updated their dotfiles gets the session name and nothing more.

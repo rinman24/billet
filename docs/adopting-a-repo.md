@@ -66,7 +66,7 @@ Then merge the two snippets:
   bind mount is StrictModes-clean), and the `COPY` of `sshd.conf` into
   `/etc/ssh/sshd_config.d/`.
 
-### Dotfiles: chezmoi + tmux/TPM (the standard)
+### Dotfiles: chezmoi (the standard)
 
 Workspaces standardize on [chezmoi](https://chezmoi.io)-managed dotfiles. Bake the chezmoi
 binary into the dev-container image (billet's own Dockerfile pins it into `/usr/local/bin`),
@@ -74,9 +74,8 @@ and pull the dotfiles at container start with `chezmoi init --apply rinman24` (f
 `chezmoi update --apply` (thereafter). billet's global `personal_bootstrap_cmd` does exactly
 this on every `billet start`; billet's own `devcontainer.json` `postCreateCommand` repeats it
 so a direct devcontainer open gets dotfiles too. Both paths converge on the same
-[`rinman24/dotfiles`](https://github.com/rinman24/dotfiles) repo, which owns tmux and TPM
-(Tmux Plugin Manager) via its `.chezmoiexternal.toml` + run scripts — so there is no separate
-TPM install step and no tmux config baked into any image.
+[`rinman24/dotfiles`](https://github.com/rinman24/dotfiles) repo, which owns the tmux
+config — so no tmux config is baked into any image.
 
 ### Rendering billet's Workspace identity (the consuming half)
 
@@ -109,11 +108,11 @@ Rendering is optional. `tmux_session` defaults to the Workspace key, so stock tm
 `status-left` of `[#{session_name}] ` already tells you which Workspace you are in, and
 `tmux show -g @billet_workspace` answers it exactly.
 
-#### Worked example: catppuccin v2
+#### Worked example: a one-line status segment
 
-The dotfiles set `status-left ""` and compose `status-right` by appending
-`@catppuccin_status_*` modules, so a billet segment is one more append — put it after the
-catppuccin module lines:
+Nothing below depends on a theme or a plugin manager — the options are plain tmux user
+options, so any config can read them. The most portable form is a single append to
+`status-right`:
 
 ```text
 set -ag status-right '#{?#{@billet_workspace},#[#{?#{@billet_color},bg=#{@billet_color}#,fg=#11111b,default}] #{@billet_workspace}#{?#{@billet_host}, @ #{@billet_host},} #[default],}'
@@ -122,8 +121,8 @@ set -ag status-right '#{?#{@billet_workspace},#[#{?#{@billet_color},bg=#{@billet
 The outer ternary drops the segment whole when billet published nothing. The inner one styles
 the label with the brand color when `status_color` is set and falls back to `default` when it
 is not, so the label still renders on an uncolored Workspace — `#,` is the escape for a
-literal comma inside a ternary branch, and `#11111b` is catppuccin mocha's `crust`, legible on
-the brand hues. Expansions (`tmux display-message -p '#{E:status-right}'`, tmux 3.7b):
+literal comma inside a ternary branch, and `#11111b` is a near-black picked to stay legible
+on the brand hues. Expansions (`tmux display-message -p '#{E:status-right}'`, tmux 3.7b):
 
 | published | segment expands to |
 | --- | --- |

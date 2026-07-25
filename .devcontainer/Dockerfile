@@ -102,8 +102,7 @@ RUN git config --system push.autoSetupRemote true
 # start, either via billet's global personal_bootstrap_cmd (every Workspace on `billet start`)
 # or, for a direct devcontainer open, via devcontainer.json's postCreateCommand
 # (`chezmoi update --apply || chezmoi init --apply rinman24`). Both paths converge on the
-# rinman24/dotfiles repo, which also owns tmux + TPM (Tmux Plugin Manager) via its
-# .chezmoiexternal.toml + run scripts — so no tmux config or TPM step is baked here. Pinned
+# rinman24/dotfiles repo, which owns the tmux config — so no tmux config is baked here. Pinned
 # to the version the operator runs locally, same digest-pinned reproducibility as uv/nvim above.
 RUN sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin -t v2.71.0 \
     && chezmoi --version
