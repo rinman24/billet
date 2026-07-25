@@ -52,3 +52,4 @@ nav:
       - ADR-0006 Claude token injection: adr/adr-0006-claude-token-injection.md
       - ADR-0007 Source fast-forward on start: adr/adr-0007-source-fast-forward-on-start.md
       - ADR-0008 Workspace identity publication: adr/adr-0008-workspace-identity-publication.md
+      - ADR-0009 Scope of identity publication: adr/adr-0009-scope-of-identity-publication.md
