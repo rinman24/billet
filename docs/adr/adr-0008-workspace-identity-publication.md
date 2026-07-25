@@ -6,7 +6,9 @@ Accepted (2026-07-25). Applies [ADR-0002](adr-0002-workspace-subsystem.md) §3's
 model — a tool-owned artifact plus one include seam, never in-place mutation — to the tmux
 status bar, and extends [ADR-0005](adr-0005-instance-lifecycle-ownership.md)'s "adopt, don't
 own" boundary from cloud infrastructure to operator-owned *configuration*. Decision only: no
-behavior changes with this ADR; implementation follows in separate PRs.
+behavior changes with this ADR; implementation follows in separate PRs. Extended by
+[ADR-0009](adr-0009-scope-of-identity-publication.md), which closes the published set at the
+three options named in rule 1 and states the test any fourth must pass.
 
 ## Context
 
