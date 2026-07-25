@@ -66,32 +66,41 @@ free. User options exist since tmux 3.0; the containers here run ≥ 3.3a.
 **billet publishes Workspace identity into the tmux session as data. The operator's adopted
 dotfiles own all presentation.**
 
-Five rules define the contract:
+Six rules define the contract:
 
 1. **Identity is published as tmux user options**, on the same prelude position billet uses
    today (ahead of `new-session -A`, for the reasons already documented): `@billet_workspace`,
    `@billet_host`, `@billet_color`. These are data only — never rendered output. The dotfiles
    interpolate them wherever the operator wants identity to appear.
-2. **billet does not write presentation options.** `status-style`, `status-left`,
-   `status-right`, `status-format`, `status-*-length` and `window-status-*` are out of scope as
-   billet's steady-state contract. Those belong to the theme and the operator who chose it.
-3. **A self-disabling paint fallback is retained.** A feature whose entire job is "tell me
-   which container I'm in" must not default to no signal, so billet still paints when nothing
-   else will — guarded on a dotfiles-set opt-out flag (e.g. `@billet_status_owner`), tested
-   with a format-only `if-shell -F` so the guard costs no fork. Dotfiles that consume the
-   published options set the flag and billet goes quiet; dotfiles that don't, get today's
-   behavior. Silence-by-default was rejected: it would ship a feature that is invisibly dead on
-   every container whose dotfiles have not been updated.
+2. **billet does not write presentation options — ever, not merely by default.**
+   `status-style`, `status-left`, `status-right`, `status-format`, `status-*-length` and
+   `window-status-*` are out of scope, unconditionally. Those belong to the theme and to the
+   operator who chose it. `TmuxStatusEngine` loses `readable_fg` along with them: picking a
+   legible foreground is a rendering decision, and billet no longer renders.
+3. **billet renders nothing; silence by default is accepted.** There is no paint fallback and
+   no opt-out flag. A Workspace whose dotfiles do not consume the published options gets no
+   billet-supplied status branding, and that is the intended behavior — a clean ownership
+   boundary is worth more than a guaranteed signal. Crucially, "silence" is not the same as
+   "no identity": the options remain queryable (`tmux show -g @billet_workspace`), and once
+   `tmux_session` carries the Workspace key (rule 6), *stock* tmux already renders it — its
+   default `status-left` is `[#{session_name}] `, verified on tmux 3.7b — so an unconfigured
+   container still shows the Workspace name without billet writing a single presentation
+   option.
 4. **Icons and logos are presentation, therefore the dotfiles' business.** billet may publish a
    glyph *name* or brand token; it never renders one. This resolves `FAVICON_INJECTION.md` —
    both its Approach A (glyph) and Approach B (image protocol) — as won't-do. Concretely: a
    billet glyph is constant across every Workspace, so it spends the scarcest row on the screen
    to convey zero information; it is monochrome; a missing glyph renders as tofu that billet
-   cannot detect from the far side of the SSH session; and the existing
-   `status-left-length` arithmetic counts Python codepoints where tmux counts cells, so a
-   glyph silently mis-sizes the field.
+   cannot detect from the far side of the SSH session; and sizing the field correctly requires
+   cell-width measurement rather than a codepoint count (a double-width emoji is one codepoint
+   in two cells, a ZWJ sequence three codepoints in two), which is the renderer's problem to
+   solve and therefore belongs where the font is also known.
 5. **`status_color` stays operator intent in the registry**, with its existing hex validation
    and its existing place in the `[workspaces.<key>]` block. Only *who renders it* moves.
+6. **`tmux_session` defaults to the Workspace key.** This is what makes rule 3 safe, so it
+   belongs to this contract rather than being an incidental follow-up: it moves identity onto a
+   channel billet already owns (the `new-session -s` argument) and that every theme — including
+   no theme at all — renders for free as `#S`.
 
 ## Consequences
 
@@ -109,11 +118,16 @@ Five rules define the contract:
 - The operator takes on a maintenance burden: a catppuccin module that interpolates
   `#{@billet_*}` into tmux's format DSL, which has famously poor error messages and fails by
   rendering something subtly wrong rather than by erroring.
-- A new operator who has not updated their dotfiles gets only the fallback (rule 3) — correct
-  and useful, but not the themed integration, and nothing tells them what they are missing.
-- Not in scope, noted as a follow-up: `tmux_session` defaults to `"main"` for every Workspace
-  (`toml_registry_access.py:184`), discarding a free per-Workspace identity channel that every
-  theme already renders as `#S`.
+- A new operator who has not updated their dotfiles gets the session name and nothing more.
+  This is the accepted cost of rule 3, and it is a real regression against today's behavior for
+  that operator: no brand color, no styled segment, and nothing that tells them a richer
+  integration exists. The mitigation is documentation, not code — `docs/adopting-a-repo.md`
+  gains the consuming snippet in place of its current "pick one" caveat.
+- Deleting the paint path means billet permanently gives up the ability to signal identity on a
+  container it does not control the dotfiles of. If a future Workspace must be branded without
+  operator cooperation, this ADR has to be revisited rather than extended — rule 2 is
+  unconditional by design, and a `--paint` escape hatch would reintroduce exactly the collision
+  and the dual rendering paths this ADR removes.
 
 ## Alternatives considered
 
@@ -129,9 +143,16 @@ Five rules define the contract:
   Rejected: billet would encode a specific theme's private cache variable and inherit its
   refactors. Unset user options expanding to empty means the published contract needs no probe
   at all.
-- **Silence by default; paint only when asked.** Rejected: the feature exists to answer "which
-  container is this?", and a default that answers nothing is worse than a default that
-  occasionally over-paints. Hence the opt-out flag in rule 3 rather than an opt-in one.
+- **Retain a self-disabling paint fallback**, guarded on a dotfiles-set opt-out flag (e.g.
+  `@billet_status_owner`) tested with a format-only `if-shell -F`. This was the initially
+  drafted rule 3, on the reasoning that a feature answering "which container is this?" must not
+  default to no signal. Rejected: it keeps billet writing theme-owned options on precisely the
+  containers whose configuration billet knows least about, so the `status-style` collision
+  survives as the *default* path rather than being removed; it leaves two rendering paths to
+  specify, test, and keep in sync forever; and it makes the ownership boundary conditional,
+  which is the property this ADR exists to eliminate. The argument that motivated it does not
+  survive rule 6: with `tmux_session` carrying the Workspace key, an unconfigured container is
+  not silent — stock tmux renders `[#{session_name}] ` in its default `status-left`.
 - **Ship the glyph** (`FAVICON_INJECTION.md` Approach A). Rejected per rule 4: constant across
   Workspaces, monochrome, tofu-risk undetectable remotely, and it breaks the length arithmetic.
 - **Terminal image protocols** (Approach B). Rejected for the reasons that note already
