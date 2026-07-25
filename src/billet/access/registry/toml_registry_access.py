@@ -181,7 +181,11 @@ class RegistryAccess:
             ),
             host_alias=self._str(table, "host_alias", ctx),
             container_alias=self._str(table, "container_alias", ctx),
-            tmux_session=self._str(table, "tmux_session", ctx, default="main"),
+            # Defaults to the table key (ADR-0008 rule 6): the session name then carries
+            # the Workspace identity on a channel billet already owns (`new-session -s`),
+            # which stock tmux renders for free via its default `status-left` of
+            # "[#{session_name}] " — so silence-by-default (rule 3) still shows the key.
+            tmux_session=self._str(table, "tmux_session", ctx, default=key),
             agent_teams_flag=self._str(table, "agent_teams_flag", ctx, default=""),
             host_bootstrap_cmd=self._str(table, "host_bootstrap_cmd", ctx, default=":"),
             verify_cmd=self._str(table, "verify_cmd", ctx, default="make test"),
