@@ -51,3 +51,4 @@ nav:
       - ADR-0005 Instance-lifecycle ownership: adr/adr-0005-instance-lifecycle-ownership.md
       - ADR-0006 Claude token injection: adr/adr-0006-claude-token-injection.md
       - ADR-0007 Source fast-forward on start: adr/adr-0007-source-fast-forward-on-start.md
+      - ADR-0008 Workspace identity publication: adr/adr-0008-workspace-identity-publication.md
