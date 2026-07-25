@@ -162,9 +162,21 @@ def test_parses_workspace_with_defaults(tmp_path: Path) -> None:
     assert ws.container_ssh_port == 2222
     assert ws.host_alias == "gswa-devbox"
     assert ws.container_alias == "gswa-container"
-    assert ws.tmux_session == "main"
     assert ws.host_bootstrap_cmd == ":"
     assert ws.verify_cmd == "make test"
+
+
+def test_workspace_tmux_session_defaults_to_the_workspace_key(tmp_path: Path) -> None:
+    # ADR-0008 rule 6: the session name carries the Workspace identity, so stock tmux's
+    # default `status-left` ("[#{session_name}] ") renders it without billet painting.
+    ws = RegistryAccess(_write(tmp_path, _FULL_CONFIG)).workspace("gswa-backend")
+    assert ws.tmux_session == "gswa-backend"
+
+
+def test_workspace_explicit_tmux_session_overrides_the_default(tmp_path: Path) -> None:
+    text = _FULL_CONFIG + 'tmux_session = "custom"\n'
+    ws = RegistryAccess(_write(tmp_path, text)).workspace("gswa-backend")
+    assert ws.tmux_session == "custom"
 
 
 def test_workspace_status_color_defaults_to_none(tmp_path: Path) -> None:

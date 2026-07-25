@@ -128,7 +128,6 @@ host               = "devbox"                                  # which [hosts.<k
 repo_url           = "git@github.com:genshift/gswa-backend.git"
 repo_dir           = "gswa-backend"                            # dir on the host (relative to $HOME)
 container_ssh_port = 2222                                      # distinct loopback port per workspace
-tmux_session       = "main"                                    # tmux session `connect` attaches
 host_alias         = "gswa-devbox"                             # preserved ssh-config aliases
 container_alias    = "gswa-container"
 # Optional Claude agent-teams flag written into the repo's .claude/settings.local.json
@@ -140,9 +139,20 @@ agent_teams_flag   = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 host_bootstrap_cmd = ":"
 # What `billet start --verify` runs inside the container after a cold bootstrap.
 verify_cmd         = "make test"
-# Optional. Hex brand color ("#RGB" or "#RRGGBB") for this Workspace's tmux status bar on
-# `billet connect`, so you can tell containers apart at a glance. billet auto-picks a legible
-# text color and always shows the workspace key on the bar. Omit to keep tmux's default.
+# Optional. The tmux session `billet connect` attaches (`tmux new-session -A -s …`).
+# DEFAULTS TO THE TABLE KEY — here "gswa-backend" — which is why it is left out: the session
+# name then identifies the Workspace, so `#S` and stock tmux's default `status-left`
+# ("[#{session_name}] ") show which container you are in with no tmux config at all
+# (ADR-0008 rule 6). Set it only to attach a session some other tool already owns.
+# tmux_session       = "gswa-backend"
+#
+# Optional. Hex brand color ("#RGB" or "#RRGGBB") — this Workspace's brand identity, so you
+# can tell containers apart at a glance. billet does NOT paint it: on `connect` it publishes
+# the value as the tmux user option `@billet_color` (alongside `@billet_workspace` and
+# `@billet_host`) and YOUR tmux config decides whether and how to render it — billet writes
+# no status-bar option, ever (ADR-0008). Unset options expand to "" in tmux formats, so a
+# config that references them is safe everywhere. See docs/adopting-a-repo.md for the
+# consuming snippet. Omit this key and `@billet_color` is simply never set.
 status_color       = "#C05CE0"
 
 # ---------------------------------------------------------------------------------
@@ -166,9 +176,11 @@ status_color       = "#C05CE0"
 # repo_url           = "git@github.com:my-org/other-repo.git"
 # repo_dir           = "other-repo"
 # container_ssh_port = 2223                                      # distinct from gswa-backend's 2222
-# tmux_session       = "main"
 # host_alias         = "gswa-devbox"                             # same host alias (one VM)
 # container_alias    = "other-container"                         # distinct container alias
 # host_bootstrap_cmd = ":"
 # verify_cmd         = "make test"
 # status_color       = "#5C9CE0"                                 # optional; a distinct hue tells it apart
+# tmux_session is omitted here too, so it defaults to "other-repo" — two Workspaces on one
+# Host get two distinctly named sessions for free. Pinning both to "main" would throw that
+# away (and, on the same Host, name two different repos' sessions identically).

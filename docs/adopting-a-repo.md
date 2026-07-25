@@ -78,9 +78,59 @@ so a direct devcontainer open gets dotfiles too. Both paths converge on the same
 (Tmux Plugin Manager) via its `.chezmoiexternal.toml` + run scripts — so there is no separate
 TPM install step and no tmux config baked into any image.
 
-Caveat: the dotfiles repo's `catppuccin/tmux` status-bar theme conflicts with billet's
-per-Workspace `status_color` injection (both drive the tmux status bar). Pick one — either
-drop `status_color` from the Workspace block, or don't load catppuccin/tmux.
+### Rendering billet's Workspace identity (the consuming half)
+
+billet never writes `status-style`, `status-left`, or any other presentation option — the
+theme owns those ([ADR-0008](adr/adr-0008-workspace-identity-publication.md)). Instead
+`connect` publishes three tmux **user options** into the session, and your own tmux config
+decides whether and how to render them:
+
+| Option | Value |
+| --- | --- |
+| `#{@billet_workspace}` | the Workspace key |
+| `#{@billet_host}` | the Host key |
+| `#{@billet_color}` | the Workspace's `status_color` — hex, **with** its leading `#`; unset when the block omits it |
+
+Consuming them takes two primitives (verified on tmux 3.7b):
+
+```text
+#{?#{@billet_workspace},…present…,…absent…}   # ternary guard: unset options expand to ""
+#[bg=#{@billet_color}]                        # correct — expands to #[bg=#C05CE0]
+#[bg=##{@billet_color}]                       # WRONG — ## is tmux's literal-# escape, so
+                                              #   this yields the uninterpolated text
+                                              #   #[bg=#{@billet_color}]
+```
+
+The color already carries its `#`; interpolate it directly and never double it. Guard every
+segment with the ternary so the same config still works in a plain shell tmux, where the
+options do not exist.
+
+Rendering is optional. `tmux_session` defaults to the Workspace key, so stock tmux's default
+`status-left` of `[#{session_name}] ` already tells you which Workspace you are in, and
+`tmux show -g @billet_workspace` answers it exactly.
+
+#### Worked example: catppuccin v2
+
+The dotfiles set `status-left ""` and compose `status-right` by appending
+`@catppuccin_status_*` modules, so a billet segment is one more append — put it after the
+catppuccin module lines:
+
+```text
+set -ag status-right '#{?#{@billet_workspace},#[#{?#{@billet_color},bg=#{@billet_color}#,fg=#11111b,default}] #{@billet_workspace}#{?#{@billet_host}, @ #{@billet_host},} #[default],}'
+```
+
+The outer ternary drops the segment whole when billet published nothing. The inner one styles
+the label with the brand color when `status_color` is set and falls back to `default` when it
+is not, so the label still renders on an uncolored Workspace — `#,` is the escape for a
+literal comma inside a ternary branch, and `#11111b` is catppuccin mocha's `crust`, legible on
+the brand hues. Expansions (`tmux display-message -p '#{E:status-right}'`, tmux 3.7b):
+
+| published | segment expands to |
+| --- | --- |
+| workspace + host + color | `#[bg=#C05CE0,fg=#11111b] billet @ devbox #[default]` |
+| workspace + host, no color | `#[default] billet @ devbox #[default]` |
+| workspace only | `#[default] billet #[default]` |
+| nothing | *(empty)* |
 
 Sanity checks before merging the PR:
 
@@ -101,7 +151,6 @@ host               = "devbox"
 repo_url           = "git@github.com:my-org/my-repo.git"
 repo_dir           = "my-repo"
 container_ssh_port = 2225                    # distinct per Host; `billet add` validates
-tmux_session       = "main"
 host_alias         = "gswa-devbox"           # same alias as the shared Host
 container_alias    = "my-repo-container"     # distinct per Workspace
 host_bootstrap_cmd = "cp -n .devcontainer/.env.example .devcontainer/.env"
@@ -130,7 +179,10 @@ billet connect my-repo          # ProxyJump in, land in the tmux session
 ```
 
 `connect` runs `tmux new-session -A`, so the session is created on first attach — the
-repo does not need to pre-create it.
+repo does not need to pre-create it. `tmux_session` is omitted above on purpose: it defaults
+to the Workspace key (`my-repo`), which is what makes the session name identify the Workspace
+in `#S` and in stock tmux's default `status-left`. Set it explicitly only to attach to a
+session some other tool already owns.
 
 ## Port ledger
 
