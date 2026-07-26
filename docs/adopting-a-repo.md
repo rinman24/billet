@@ -131,6 +131,35 @@ on the brand hues. Expansions (`tmux display-message -p '#{E:status-right}'`, tm
 | workspace only | `#[default] billet #[default]` |
 | nothing | *(empty)* |
 
+#### Live state is yours, not billet's
+
+Those three options are the whole set, and the set is closed
+([ADR-0009](adr/adr-0009-scope-of-identity-publication.md)). A fourth is admitted only if it is
+in hand on the connect path with no new I/O, stable across connects, not derivable more cheaply
+in-session, and identity rather than telemetry. Host power state, public IP and container
+running state each fail at least one of those, and `billet ls` already reports host IP and
+running state — a status bar is not where they are needed.
+
+Branch and dirty state is the thing you will most want on the bar, and it is the clearest
+non-candidate. The prelude leads `new-session -A`, so it re-publishes on every `billet connect`
+— but nothing updates the options between connects: `connect` `execvp`s into `ssh` and leaves
+no billet process behind. A published branch name would be honest until your next checkout and
+stale after it. It is also the cheapest thing to compute in-session, so put it in your own
+config as a `#()` segment:
+
+```text
+set -ag status-right '#(git -C "#{pane_current_path}" rev-parse --abbrev-ref HEAD 2>/dev/null | sed "s|.*| &|")'
+```
+
+`git -C` against the pane's own directory, `2>/dev/null` so a pane outside a repo renders
+nothing, and the `sed` supplies the leading space only when there is a branch — so the segment
+disappears whole rather than leaving a gap.
+
+The cost is one fork per attached client per `status-interval`. Measured on tmux 3.7b: 6
+invocations in ~6 s at `status-interval 1`, and 0 in ~8 s at `status-interval 15`. The cadence
+is your dial — a one-second interval with a `#()` segment is a fork per second per attached
+client, paid inside the container, for as long as the client stays attached.
+
 Sanity checks before merging the PR:
 
 - `devcontainer.json` declares `service`, `dockerComposeFile`, `workspaceFolder`, and
