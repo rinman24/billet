@@ -153,7 +153,10 @@ set -ag status-right '#(git -C "#{pane_current_path}" rev-parse --abbrev-ref HEA
 
 `git -C` against the pane's own directory, `2>/dev/null` so a pane outside a repo renders
 nothing, and the `sed` supplies the leading space only when there is a branch — so the segment
-disappears whole rather than leaving a gap.
+disappears whole rather than leaving a gap. (Do not verify this one the way you verified the
+options above: `display-message -p` does not run `#()` jobs, so it expands the segment to
+nothing whether or not the segment works — to prove the job fires, give the command a side
+effect such as `| tee -a /tmp/probe` and tail that file instead.)
 
 The cost is one fork per attached client per `status-interval`. Measured on tmux 3.7b: 6
 invocations in ~6 s at `status-interval 1`, and 0 in ~8 s at `status-interval 15`. The cadence
