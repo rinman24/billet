@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-07-25). Extends [ADR-0008](adr-0008-workspace-identity-publication.md), which
+Accepted (2026-07-27). Extends [ADR-0008](adr-0008-workspace-identity-publication.md), which
 established *that* billet publishes Workspace identity as tmux user options but did not bound
 *what*. Decision only: no behavior changes, and — uniquely among the ADRs here — no
 implementation is expected to follow. The outcome is that `TmuxStatusEngine` stays as
