@@ -196,6 +196,12 @@ configured `repo_url`, printing a `[billet/source]` warning when the two differ 
 checkout has no `origin` at all. It does **not** rewrite the remote, and does not add a
 missing one.
 
+A checkout with no remote at all is not an error either: `git fetch --prune` in a repo with
+nothing configured is a silent no-op that exits 0, so the run falls through to the "no
+upstream" skip and ends at exit 0. The warning is the whole signal — without it, a Workspace
+that had quietly stopped tracking anything would look identical to one that was already up
+to date.
+
 This is [ADR-0005](adr-0005-instance-lifecycle-ownership.md) applied to a remote. billet owns
 the checkout it created, but a remote an operator repointed — at a fork, a mirror, an
 internal proxy — is *adopted* state, exactly like the dirty tree the clean-only guard refuses
