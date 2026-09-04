@@ -19,6 +19,12 @@ operators reach it both bypass the container's compose-provided environment:
   `BILLET_CONTAINER_SSH_PORT` and the personal bootstrap.
 - squadra fleet runners launch `claude` the same way (through the container's sshd).
 
+Since 2026-09-04 the Workspace entrypoint *republishes* the container's **non-secret**
+environment into those login shells via `/etc/environment` and `pam_env` (see the
+[ADR-0003 amendment](adr-0003-workspace-port-binding-contract.md)) — the session still
+inherits nothing, and that channel is world-readable and may silently skip a value, so it
+carries no secrets and the decision below stands unchanged.
+
 So `.env` / `environment:` / a compose override cannot reliably reach `claude`, and an
 interactive `claude` login inside every container — re-done on every rebuild — is exactly
 the unattended-unfriendly step the fleet exists to remove. We want ONE central token,
@@ -49,8 +55,10 @@ runs the operator's `personal_bootstrap_cmd` string.
 
 Claude Code applies the `env` block of the user-level `~/.claude/settings.json` to **every
 session and to subprocesses it spawns**, regardless of how `claude` was launched — so it
-reaches `claude` over sshd where an environment export does not. This is verified against
-the official docs:
+reaches `claude` over sshd where an environment export in the remote shell does not, and
+without depending on the lossy, world-readable `/etc/environment` republication the
+[ADR-0003 amendment](adr-0003-workspace-port-binding-contract.md) later added for
+non-secrets. This is verified against the official docs:
 
 - Settings (`code.claude.com/docs/en/settings`): user settings live in
   `~/.claude/settings.json` and "apply to all projects"; the `env` key holds "environment
@@ -118,8 +126,11 @@ open.
 ## Alternatives considered
 
 - **compose `environment:` / `env_file:` / a compose override.** Rejected: an sshd login
-  shell inherits none of them (ADR-0003), so `claude` over `connect` / the fleet never sees
-  the value.
+  shell inherits none of them (ADR-0003). Since the 2026-09-04 amendment to that ADR the
+  entrypoint does republish such values into login shells, so `claude` *can* now see them —
+  but that channel is world-readable and silently skips values it cannot quote, which
+  disqualifies it for a credential on its own terms. The rejection stands on secrecy, not on
+  reachability.
 - **`apiKeyHelper` inside the container.** Viable long-term (it also reads a command), but it
   would require a per-container script and still needs the secret to reach the container;
   settings.json `env` needs nothing installed in the image and no per-repo change.

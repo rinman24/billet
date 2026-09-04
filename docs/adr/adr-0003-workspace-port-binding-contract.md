@@ -6,6 +6,12 @@ Accepted (2026-07-01). Extends [ADR-0002](adr-0002-workspace-subsystem.md) for t
 multi-workspace slice (slice 6). Governs how a repo's in-container sshd binds the loopback
 port billet assigns it.
 
+Amended (2026-09-04): the Workspace entrypoint now republishes the container's **non-secret**
+environment into sshd login shells through `/etc/environment` and `pam_env`. The port contract
+and the sshd non-inheritance recorded here are unchanged — see
+[Amendment (2026-09-04)](#amendment-2026-09-04-non-secret-container-environment-reaches-login-shells)
+below.
+
 ## Context
 
 billet reaches each Workspace's container through a distinct loopback port on the shared
@@ -79,3 +85,71 @@ Why this shape (volatility + DDD):
   removes.
 - **billet SSHes in and edits the repo's compose.** Rejected outright: violates the
   reader-not-editor boundary (ADR-0002) and would fight the repo's own version control.
+
+## Amendment (2026-09-04): non-secret container environment reaches login shells
+
+The Workspace entrypoint (`templates/workspace/dev-entrypoint.sh`, and billet's own
+`.devcontainer/` copy of it) now snapshots its own environment into `/etc/environment`
+immediately before starting sshd. Debian ships `UsePAM yes` in `/etc/ssh/sshd_config`, and
+its `/etc/pam.d/sshd` runs `session required pam_env.so`, which reads `/etc/environment` for
+**every** session — so a value written there is visible in `billet connect` shells, in the
+tmux session `connect` attaches, and in anything squadra's fleet runners launch over the same
+sshd. Verified inside a running Workspace on Debian 12 bookworm: a real ssh session returned
+the published values with spaces preserved and `PATH` untouched.
+
+The regression that motivated it: `DISABLE_AUTOUPDATER=1` and
+`TYPST_FONT_PATHS=/workspace/fonts` were set in the image and in compose but absent from
+`billet connect` shells, so Claude Code auto-updated off its pinned version and Typst could
+not find its fonts.
+
+### Why this does not contradict ADR-0006
+
+[ADR-0006](adr-0006-claude-token-injection.md) states that an sshd login shell inherits
+neither `environment:` nor `env_file:` nor a compose override. **That is still exactly true,
+and nothing here changes it.** The sshd session is a fresh PAM session that inherits nothing
+from the container's PID 1, and the entrypoint does not make it inherit anything. What the
+entrypoint does is *republish* the values it was given, into a file PAM reads on its own
+account. The non-inheritance is the unchanged premise the mechanism is built on, not
+something it repeals: what changed is that non-secret values now have a supported way across
+the gap, where before they had none.
+
+### Secrets keep the ADR-0006 channel
+
+Credentials still travel only through `~/.claude/settings.json` (ADR-0006) and must never be
+put in compose `environment:`. Two independent reasons, either one sufficient:
+
+- `/etc/environment` is installed mode `0644` — world-readable to every user and every
+  process in the container. A credential written there is a credential published.
+- The skip rule below means a value can be *silently dropped*. A path that sometimes
+  delivers a secret and sometimes does not is not a credential path.
+
+### What is published, and what is not
+
+Excluded by name and never published: `HOME`, `PATH`, `SHELL`, `USER`, `LOGNAME`, `PWD`,
+`OLDPWD`, `HOSTNAME`, `TERM`, `SHLVL`, `_`. These are per-session or per-process values a
+login shell must own for itself; pinning them globally to whatever the entrypoint process
+happened to be started with would hand every later session PID 1's idea of who it is, where
+it is, and what it can run.
+
+Everything else is written in pam_env's `KEY="value"` form and `LC_ALL=C sort`ed, so the file
+is byte-stable across restarts. The billet-owned region is delimited by marker comments and
+regenerated wholesale on each start, so whatever the image baked into `/etc/environment`
+outside the markers survives.
+
+pam_env is a weak format and the entrypoint does not pretend otherwise: it strips exactly one
+pair of surrounding quotes, does no backslash unescaping, and joins a line ending in a
+backslash onto the next. A value containing a `"`, a backslash, or a control character
+therefore has **no faithful representation** in the file. Those are skipped, with a warning on
+the container's stderr, rather than written back mangled — an absent variable is a
+diagnosable failure; a silently corrupted one is not. This is a real limit of the channel, not
+an implementation gap: such a value cannot be delivered this way at all, and a repo that needs
+one must carry it some other way.
+
+### Consequence for consumers
+
+`dev-entrypoint.sh` is a template consumers copy verbatim into their own `.devcontainer/`
+([`templates/workspace/`](https://github.com/rinman24/billet/tree/main/templates/workspace)),
+not something billet injects at runtime. An adopted repo therefore gains this behavior only
+when it **re-copies** `dev-entrypoint.sh`; no compose, Dockerfile, or `config.toml` change is
+needed, and a repo that has not re-copied is unaffected. The template README's revision log
+records the change for exactly this reason.

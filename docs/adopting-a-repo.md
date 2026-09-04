@@ -44,12 +44,23 @@ verbatim into `.devcontainer/`:
 
 - `sshd.conf` — key-only / non-root / `dev`-only sshd drop-in, host keys on a named
   volume.
-- `dev-entrypoint.sh` — generates the persisted host keys on first boot, `sshd -t`
-  fail-fast, starts sshd via sudo, then `exec "$@"`.
+- `dev-entrypoint.sh` — two jobs. It generates the persisted host keys on first boot,
+  `sshd -t` fail-fasts, starts sshd via sudo, then `exec "$@"`; and, just before sshd
+  starts, it snapshots the container's own environment into `/etc/environment` so image
+  `ENV` and compose `environment:` values are visible in sshd login shells.
 - `authorized_keys-stub` — tracked empty fallback so a build away from the VM never
   hard-fails.
 - `env.example` → save as `.devcontainer/.env.example`, and add `.devcontainer/.env` to
   the repo's `.gitignore`.
+
+That `/etc/environment` snapshot is how **non-secret** image and compose environment reaches
+`billet connect`, tmux, and the fleet runners: an sshd login shell inherits nothing from the
+container's PID 1, so the entrypoint republishes the values into the file `pam_env` reads on
+every session (the [ADR-0003 amendment](adr/adr-0003-workspace-port-binding-contract.md) has
+the mechanism and its limits — the file is world-readable, and a value containing `"`, a
+backslash, or a control character is skipped with a warning). It is not a secret channel:
+credentials keep travelling through `~/.claude/settings.json`
+([ADR-0006](adr/adr-0006-claude-token-injection.md)), never compose `environment:`.
 
 Then merge the two snippets:
 
