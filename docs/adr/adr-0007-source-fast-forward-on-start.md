@@ -8,6 +8,11 @@ converging it to upstream on `start` is instance lifecycle — while the clean-o
 ADR-0005's "adopt, don't own" half applied to a checkout an operator or bootstrap has
 touched.
 
+Amended (2026-09-04): every git the emitted script runs on the Host is now non-interactive,
+and the script reports — without rewriting — drift between the checkout's `origin` and the
+configured `repo_url`. The clean-only, ff-only convergence rule recorded here is unchanged —
+see [Amendment (2026-09-04)](#amendment-2026-09-04-non-interactive-git-on-the-host) below.
+
 ## Context
 
 `ensure_clone` (`billet.access.source.GitSourceAccess`) emits a remote bash script, run over
@@ -121,3 +126,96 @@ config edit.
 - **Include untracked files in the dirty check.** Rejected: the permanent untracked `.env`
   would block the advance on every start forever — the feature would never fire on the fleet
   it exists for.
+
+## Amendment (2026-09-04): non-interactive git on the Host
+
+### A git that CAN prompt does not fail — it hangs
+
+`billet start` is unattended, and the remote script runs behind a captured `ssh -t` channel:
+nothing the Host writes while the command is in flight reaches the operator's terminal. Any
+credential prompt therefore becomes a silent stall. Observed on a Host checkout whose
+`origin` had been switched to an HTTPS URL: the `git fetch --prune` above sat at `Username:`
+for minutes, with an empty screen and no exit code. The failure mode is not a poor error
+message — it is the absence of one, for an unbounded time.
+
+The ADR above names this hazard once already: `git pull` was rejected partly because
+conflict resolution "turn[s] an unattended `start` into an interactive one." That reasoning
+was applied to the merge step only. The two steps that talk to the network — where the
+credential prompt actually lives — were left interactive, and none of the guards above help:
+the hang happens before the first probe is reached.
+
+### The fix: non-interactive by construction
+
+The emitted script exports two variables before any git runs, so they cover the clone and
+the fetch alike:
+
+```bash
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new'
+```
+
+`GIT_TERMINAL_PROMPT=0` removes git's own `Username:`/`Password:` prompt (the HTTPS path);
+`BatchMode=yes` removes ssh's passphrase and host-key confirmation prompts (the ssh path).
+Together they convert every "waiting for a human" state into a non-zero exit. **A credential
+git cannot obtain is now a fast, legible failure rather than a hang.**
+
+This supersedes one line in the Consequences above: the first-clone path is no longer
+unchanged. It is wrapped and it runs under the same two variables — deliberately, because a
+first clone against a remote it cannot authenticate to hangs exactly like a fetch does.
+
+### Why `accept-new` rides along, and is not a loosening
+
+`BatchMode=yes` on its own also refuses an **unknown** host key: with no way to ask "are you
+sure you want to continue connecting?", ssh declines the connection. On a Host that has never
+met the forge that would break the *first* clone — trading one hang for a new failure, in the
+one case where nothing was wrong.
+
+`StrictHostKeyChecking=accept-new` is therefore set alongside it, and it changes nothing
+about billet's posture: it is the same option `billet.infrastructure.ssh` puts on every ssh
+argv billet builds (`_ACCEPT_NEW`). An unknown key is accepted once and recorded; a
+**changed** key still fails. That second half is the property that matters, and it is the
+existing trust-on-first-use bargain carried onto the Host-to-forge hop rather than a new
+concession. The looser `StrictHostKeyChecking=no` is rejected: it also accepts a *changed*
+key, which is the exact case the check exists for.
+
+### Failures name their cause; a fetch failure still aborts `start`
+
+Clone and fetch are each wrapped so a non-zero exit first prints a `[billet/source]` line
+naming the cause — git ran non-interactively and so could not ask for a credential or a key
+passphrase, and an `https://` remote cannot authenticate over the forwarded agent — and then
+aborts.
+
+The Decision above is unchanged in substance: **a fetch failure still aborts `start`; only
+the *advance* is best-effort.** What changed is the shape of the abort. It is now seconds and
+a cause, where before it was a stall with nothing on screen.
+
+### Origin drift is reported, never rewritten (ADR-0005)
+
+Before the fetch, the script reads `git remote get-url origin` and compares it with the
+configured `repo_url`, printing a `[billet/source]` warning when the two differ — or when the
+checkout has no `origin` at all. It does **not** rewrite the remote, and does not add a
+missing one.
+
+This is [ADR-0005](adr-0005-instance-lifecycle-ownership.md) applied to a remote. billet owns
+the checkout it created, but a remote an operator repointed — at a fork, a mirror, an
+internal proxy — is *adopted* state, exactly like the dirty tree the clean-only guard refuses
+to arbitrate. billet reports it and leaves it alone. Rewriting `origin` would silently undo a
+deliberate operator change and erase the very condition the warning exists to surface; it
+would also make billet a writer of Host-side git state, which nothing else in the script is.
+
+The ordering is load-bearing: the warning prints **before** the fetch, not after it. Drift is
+usually the cause of the failure that follows, so it has to be on screen by the time the
+fetch aborts — printed afterwards it would never be reached, since the fetch's failure exits
+the script.
+
+### `ensure_clone` surfaces the Host's own output
+
+`ensure_clone` now runs the ssh command with `check=False` and raises `ProcessError` itself,
+built from the captured stdout **and** stderr rather than stderr alone.
+
+The reason is the pty. The script runs under `ssh -t`, which gives the remote a terminal and
+merges its stderr onto the same channel as its stdout — so the Host's diagnostics arrive on
+the *client's stdout*, while the client's stderr carries only ssh-level noise. The previous
+error view (`ProcessError` raised by the runner from `stderr`) therefore rendered an empty
+tail for precisely the failures worth reading, including the two cause lines this amendment
+adds. Both streams are kept, in the order they were produced.
