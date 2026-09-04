@@ -9,7 +9,7 @@ Copy verbatim into the repo's `.devcontainer/`:
 | Template | Lands as | Purpose |
 | --- | --- | --- |
 | `sshd.conf` | `.devcontainer/sshd.conf` | Key-only, dev-only sshd hardening drop-in |
-| `dev-entrypoint.sh` | `.devcontainer/dev-entrypoint.sh` | Generates persisted host keys, starts sshd, execs the CMD |
+| `dev-entrypoint.sh` | `.devcontainer/dev-entrypoint.sh` | Generates persisted host keys, publishes the container environment to `/etc/environment`, starts sshd, execs the CMD |
 | `authorized_keys-stub` | `.devcontainer/authorized_keys-stub` | Empty fallback so non-VM builds never hard-fail |
 | `env.example` | `.devcontainer/.env.example` | Points sshd at the VM's real `authorized_keys` (gitignore `.devcontainer/.env`) |
 
@@ -23,3 +23,13 @@ Merge into existing files (placeholders: `<service>`, `<workspaceFolder>`, `<por
 
 These mirror billet's own `.devcontainer/` (the first proof that a second Workspace runs
 beside gswa-backend on one Host); squadra adopted from these templates next.
+
+## Revision log
+
+These templates carry no version marker; this log is the record. A consuming repo picks a
+change up only by re-copying the named file — nothing here is applied to an adopted repo
+automatically.
+
+| Date | Change | To adopt |
+| --- | --- | --- |
+| 2026-09-04 | `dev-entrypoint.sh` snapshots the container's environment into `/etc/environment` before starting sshd, so image `ENV` and compose `environment:` values are visible in sshd login shells (`billet connect`, tmux, fleet runners). Non-secrets only — the file is world-readable ([ADR-0003 amendment](../../docs/adr/adr-0003-workspace-port-binding-contract.md)). | Re-copy `dev-entrypoint.sh` verbatim into `.devcontainer/`. No compose, Dockerfile, or config change needed. |
