@@ -28,6 +28,10 @@ scripts/devbox/config.local.sh
 scripts/devbox/.devbox.log
 scripts/devbox/*.log
 
+# Parallel implementation worktrees (`git worktree add .worktrees/<slug>`); each is a
+# checkout of this same repo, never content to track.
+.worktrees/
+
 # Editor / OS
 .DS_Store
 *.swp
