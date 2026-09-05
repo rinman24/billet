@@ -4,11 +4,14 @@ These run the real bash the Host would run (``bash -c <script>``) against local 
 repos on a filesystem-path ``repo_url``, asserting the observable behavior the fix promises:
 first clone works, a clean branch behind upstream fast-forwards, an untracked file survives
 the advance, and every unsafe checkout (dirty tracked file, diverged branch, detached HEAD)
-is skipped non-destructively with a ``[billet/source]`` warning and a zero exit.
+is skipped non-destructively with a ``[billet/source]`` warning and a zero exit. They also
+prove the non-interactive env reaches git (through a stub ``git`` on ``PATH``) and that a
+repointed or missing ``origin`` is reported but never rewritten.
 """
 
 import os
 from pathlib import Path
+import shlex
 import subprocess
 
 from billet.access.source.git_source_access import GitSourceAccess
@@ -87,6 +90,40 @@ def _run_script(bare: Path, repo_dir: str, cwd: Path) -> subprocess.CompletedPro
     )
 
 
+#: Pinned into the env the script inherits, so only the script's own exports can replace it.
+_ENV_SENTINEL = "billet-test-sentinel"
+
+
+def _install_stub_git(root: Path, record: Path) -> Path:
+    """Write a stub ``git`` that appends its non-interactive env to ``record``; return its dir."""
+    bin_dir = root / "stub-bin"
+    bin_dir.mkdir()
+    log = shlex.quote(str(record))
+    stub = bin_dir / "git"
+    stub.write_text(
+        "#!/bin/sh\n"
+        f'printf "GIT_TERMINAL_PROMPT=%s\\n" "${{GIT_TERMINAL_PROMPT-<unset>}}" >> {log}\n'
+        f'printf "GIT_SSH_COMMAND=%s\\n" "${{GIT_SSH_COMMAND-<unset>}}" >> {log}\n'
+        "exit 0\n"
+    )
+    stub.chmod(0o755)
+    return bin_dir
+
+
+def _run_script_with_env(
+    bare: Path, repo_dir: str, cwd: Path, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run the emitted script under ``bash -c`` in ``cwd`` with an explicit environment."""
+    return subprocess.run(
+        ["bash", "-c", _emitted_script(bare, repo_dir)],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+
 def test_first_use_clones(tmp_path: Path) -> None:
     bare, _seed = _init_origin(tmp_path)
     result = _run_script(bare, "fresh", tmp_path)
@@ -153,3 +190,62 @@ def test_detached_head_skips(tmp_path: Path) -> None:
     result = _run_script(bare, "checkout", tmp_path)
     assert result.returncode == 0, result.stderr
     assert "HEAD is detached" in result.stdout
+
+
+def test_git_is_invoked_with_the_non_interactive_env(tmp_path: Path) -> None:
+    # A stub `git` early on PATH records the env it was handed. The harness env sets
+    # GIT_TERMINAL_PROMPT for its OWN git calls, so both variables are pinned to a sentinel
+    # here — only the script's own exports can produce the expected values.
+    record = tmp_path / "git-env.log"
+    bin_dir = _install_stub_git(tmp_path, record)
+    env = {
+        **_GIT_ENV,
+        "PATH": f"{bin_dir}{os.pathsep}{_GIT_ENV['PATH']}",
+        "GIT_TERMINAL_PROMPT": _ENV_SENTINEL,
+        "GIT_SSH_COMMAND": _ENV_SENTINEL,
+    }
+    result = _run_script_with_env(tmp_path / "origin.git", "fresh", tmp_path, env)
+    assert result.returncode == 0, result.stderr
+    recorded = record.read_text()  # non-empty: the stub really was the git the script ran
+    assert "GIT_TERMINAL_PROMPT=0" in recorded
+    assert "BatchMode=yes" in recorded
+    assert "StrictHostKeyChecking=accept-new" in recorded
+    assert _ENV_SENTINEL not in recorded
+
+
+def test_repointed_origin_warns_and_is_left_alone(tmp_path: Path) -> None:
+    bare, _seed = _init_origin(tmp_path)
+    checkout = _clone_checkout(tmp_path, bare)
+    other = tmp_path / "other.git"  # a second bare clone, so the fetch still succeeds
+    _git(tmp_path, "clone", "--bare", str(bare), str(other))
+    _git(checkout, "remote", "set-url", "origin", str(other))
+    result = _run_script(bare, "checkout", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "differs from the configured repo_url" in result.stdout
+    assert str(other) in result.stdout  # the drift warning names both URLs
+    assert str(bare) in result.stdout
+    # Adopted state (ADR-0005): billet reports the drift and never rewrites the remote.
+    assert _git(checkout, "remote", "get-url", "origin").stdout.strip() == str(other)
+
+
+def test_missing_origin_remote_warns_then_skips(tmp_path: Path) -> None:
+    bare, _seed = _init_origin(tmp_path)
+    checkout = _clone_checkout(tmp_path, bare)
+    _git(checkout, "remote", "remove", "origin")
+    result = _run_script(bare, "checkout", tmp_path)
+    assert "has no 'origin' remote" in result.stdout
+    # `git remote remove` drops the branch's upstream config too, and `git fetch --prune`
+    # with no remote configured is a silent no-op — so the run ends in the adopted-state
+    # skip, not a fetch failure. The warning is what tells the operator why nothing moved.
+    assert result.returncode == 0, result.stderr
+    assert "has no upstream" in result.stdout
+
+
+def test_unreachable_origin_fails_fast_with_a_named_cause(tmp_path: Path) -> None:
+    bare, _seed = _init_origin(tmp_path)
+    checkout = _clone_checkout(tmp_path, bare)
+    _git(checkout, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+    result = _run_script(bare, "checkout", tmp_path)
+    assert result.returncode != 0  # ADR-0007: a fetch failure aborts start
+    assert "[billet/source] fetch failed" in result.stderr  # the cause, on stderr
+    assert "differs from the configured repo_url" in result.stdout  # warning precedes failure

@@ -199,8 +199,15 @@ host_bootstrap_cmd = "cp -n .devcontainer/.env.example .devcontainer/.env"
 verify_cmd         = "make test"
 ```
 
-Two keys carry the tricks:
+Three keys carry the tricks:
 
+- `repo_url` — must authenticate **non-interactively** from the Host: an ssh URL reached
+  over the agent billet forwards, never an `https://` URL that would ask for a username.
+  `start` is unattended, so every Host-side git runs with prompts disabled and an
+  unauthenticated remote fails in seconds naming the cause, instead of hanging. If the Host
+  checkout's `origin` later drifts from this value, billet warns and leaves the remote alone
+  — repointing it is yours to do
+  ([ADR-0007 amendment](adr/adr-0007-source-fast-forward-on-start.md#amendment-2026-09-04-non-interactive-git-on-the-host)).
 - `container_ssh_port` — pick the next free loopback port on that Host;
   `billet add` rejects a duplicate. Use the same number as the compose default you put
   in the repo.
