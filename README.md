@@ -103,6 +103,12 @@ The compose `service`, compose file(s), `workspaceFolder`, `remoteUser`, and
 `postCreateCommand` are read live from each repo's `.devcontainer/devcontainer.json` — billet
 does not duplicate them in `config.toml`.
 
+Because `remoteUser` is read live, `billet ssh-config` can only render a Workspace that is
+already cloned on a running Host. Any other is skipped with a warning and the remaining
+aliases are still written, so one un-started Workspace never costs you connectivity to the
+rest — `billet start <key>`, then re-run `ssh-config`, to pick up its alias. See
+[ADR-0010](https://rinman24.github.io/billet/adr/adr-0010-ssh-config-partial-success/).
+
 ### Multiple Workspaces on one Host
 
 Several repos can share one VM. Give each a distinct `container_ssh_port`

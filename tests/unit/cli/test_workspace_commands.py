@@ -434,6 +434,22 @@ def test_ssh_config_dry_run_prints_without_writing(
     assert cfg.written is None
 
 
+def test_ssh_config_still_fails_when_the_host_reference_is_unknown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A config fault is never skipped (ADR-0010): it fails closed even though the other
+    # workspace rendered fine.
+    path = tmp_path / "config.toml"
+    path.write_text(_CONFIG + _SECOND_WS.replace('host = "devbox"', 'host = "ghost"'))
+    _, _, _, cfg = _install(monkeypatch)
+    result = runner.invoke(app, ["ssh-config", "--config", str(path)])
+    assert result.exit_code == 1
+    assert "[hosts.ghost]" in result.output
+    assert "skipping" not in result.output
+    assert cfg.written is None
+    assert cfg.include_calls == 0
+
+
 # --- rm ----------------------------------------------------------------------------
 
 
@@ -483,6 +499,65 @@ def test_ssh_config_renders_both_workspaces_one_host(
     assert "Port 2223" in conf
     assert "HostKeyAlias gswa-container" in conf
     assert "HostKeyAlias other-container" in conf
+
+
+def test_ssh_config_skips_an_uncloned_workspace_and_renders_the_rest(
+    monkeypatch: pytest.MonkeyPatch, two_ws_config: Path
+) -> None:
+    # ADR-0010: one un-cloned repo must not cost the operator every other berth's entry.
+    _, _, _, cfg = _install(monkeypatch, container=FakeContainerAccess(uncloned=("other-repo",)))
+    result = runner.invoke(app, ["ssh-config", "--config", str(two_ws_config)])
+    assert result.exit_code == 0
+    conf = cfg.written
+    assert conf is not None
+    assert "Host gswa-container" in conf
+    assert "Host gswa-devbox\n" in conf  # the shared host entry still lands
+    assert "other-container" not in conf  # …but the skipped berth contributes nothing
+    assert cfg.include_calls == 1
+    assert "skipping" in result.output
+    assert "other-repo" in result.output
+
+
+def test_ssh_config_skips_a_workspace_whose_host_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch, two_ws_config: Path
+) -> None:
+    # A dead transport degrades exactly like an un-cloned repo — live state, not a fault.
+    _, _, _, cfg = _install(monkeypatch, container=FakeContainerAccess(unreachable=("other-repo",)))
+    result = runner.invoke(app, ["ssh-config", "--config", str(two_ws_config)])
+    assert result.exit_code == 0
+    conf = cfg.written
+    assert conf is not None
+    assert "Host gswa-container" in conf
+    assert "other-container" not in conf
+    assert cfg.include_calls == 1
+    assert "skipping" in result.output
+    assert "other-repo" in result.output
+
+
+def test_ssh_config_fails_when_every_workspace_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, two_ws_config: Path
+) -> None:
+    _, _, _, cfg = _install(
+        monkeypatch, container=FakeContainerAccess(uncloned=("gswa-backend", "other-repo"))
+    )
+    result = runner.invoke(app, ["ssh-config", "--config", str(two_ws_config)])
+    assert result.exit_code == 1
+    assert "(gswa-backend, other-repo)" in result.output  # the error names what was skipped
+    assert cfg.written is None
+    assert cfg.include_calls == 0
+
+
+def test_ssh_config_dry_run_skips_an_uncloned_workspace(
+    monkeypatch: pytest.MonkeyPatch, two_ws_config: Path
+) -> None:
+    _, _, _, cfg = _install(monkeypatch, container=FakeContainerAccess(uncloned=("other-repo",)))
+    result = runner.invoke(app, ["ssh-config", "--config", str(two_ws_config), "--dry-run"])
+    assert result.exit_code == 0
+    assert "Host gswa-container" in result.output
+    assert "other-container" not in result.output
+    assert "skipping" in result.output
+    assert "dry-run" in result.output
+    assert cfg.written is None
 
 
 def test_ls_lists_both_workspaces(monkeypatch: pytest.MonkeyPatch, two_ws_config: Path) -> None:
@@ -556,6 +631,7 @@ def test_ssh_config_refuses_when_any_workspace_is_on_a_non_managing_host(
     result = runner.invoke(app, ["ssh-config", "--config", str(fleet_config)])
     assert result.exit_code == 1
     assert "manages_workspaces" in result.output
+    assert "skipping" not in result.output  # ADR-0004 is a fault, never a skipped berth
     assert cfg.written is None  # a command fails closed — nothing rendered
 
 

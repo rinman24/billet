@@ -382,19 +382,24 @@ def connect(key: _KeyArgument, config: _ConfigOption = None) -> None:
 
 
 def ssh_config(config: _ConfigOption = None, dry_run: _DryRunOption = False) -> None:
-    """Render the tool-owned ssh-config Include file for every Workspace."""
+    """Render the tool-owned ssh-config Include file for every renderable Workspace.
+
+    Partial success by design (ADR-0010): a Workspace's block needs a *live* read of its
+    ``devcontainer.json`` on the Host, so a Workspace that is merely not cloned yet — or
+    whose Host is down — cannot contribute an entry. Such a Workspace is skipped with a
+    caution line and the rest are still rendered: the operator's connectivity to every
+    other berth must not hinge on the state of one. Only a configuration fault (an unknown
+    host reference, an ADR-0004 misplacement) or a run in which *no* Workspace could be
+    rendered exits non-zero.
+    """
     try:
         registry = _registry(config)
         subscription_id = registry.global_config().subscription_id
         provider = provider_factory(subscription_id)
         manager = workspace_manager_factory()
         provider.preflight()
-        blocks: list[SshConfigBlock] = []
-        for ws in (registry.workspace(k) for k in registry.workspace_keys()):
-            host = registry.host(ws.host)
-            manager.assert_placement(host)  # ADR-0004: refuse a manages_workspaces=false host
-            blocks.append(_block_for(provider, manager, host, ws))
-        if not blocks:
+        keys = registry.workspace_keys()
+        if not keys:
             _ui.empty_state(
                 (
                     "no workspaces yet.",
@@ -403,14 +408,55 @@ def ssh_config(config: _ConfigOption = None, dry_run: _DryRunOption = False) -> 
                 )
             )
             return
+        blocks, skipped = _renderable_blocks(registry, provider, manager, keys)
+        if not blocks:
+            raise HostOperationError(
+                "no workspace could be rendered — every configured workspace was skipped "
+                f"({', '.join(skipped)}). Bring a host up and `billet start <key>` to clone "
+                "one, then re-run `billet ssh-config`."
+            )
         if dry_run:
             _ui.block_panel("billet.conf · dry-run", manager.render_ssh_config(blocks))
             _ui.info("dry-run — no changes made")
             return
         path = manager.install_ssh_config(blocks)
-        _ui.success(f"wrote {path}", "ensured Include in ~/.ssh/config")
+        _ui.success(f"wrote {path}", _install_detail(skipped))
     except BilletError as exc:
         _planio.fail(exc)
+
+
+def _renderable_blocks(
+    registry: RegistryAccess,
+    provider: HostProvider,
+    manager: WorkspaceManager,
+    keys: Sequence[str],
+) -> tuple[list[SshConfigBlock], list[str]]:
+    """Derive a block per Workspace; return the blocks plus the keys that had to be skipped.
+
+    A fault in the *config* still raises — an undefined host reference and an ADR-0004
+    misplacement are operator mistakes no other Workspace's entry can paper over. A fault in
+    the *live* derivation (not cloned, Host unreachable, unparseable devcontainer.json) is
+    per-Workspace state, so it is reported and stepped over (ADR-0010).
+    """
+    blocks: list[SshConfigBlock] = []
+    skipped: list[str] = []
+    for ws in (registry.workspace(k) for k in keys):
+        host = registry.host(ws.host)
+        manager.assert_placement(host)  # ADR-0004: refuse a manages_workspaces=false host
+        try:
+            blocks.append(_block_for(provider, manager, host, ws))
+        except BilletError as exc:
+            skipped.append(ws.key)
+            _ui.caution(f"skipping workspace {ws.key} — {exc}")
+    return blocks, skipped
+
+
+def _install_detail(skipped: Sequence[str]) -> str:
+    """Build the ``wrote …`` line's muted tail, naming any Workspace left out of the file."""
+    detail = "ensured Include in ~/.ssh/config"
+    if skipped:
+        detail += f" · skipped {', '.join(skipped)}"
+    return detail
 
 
 def _block_for(

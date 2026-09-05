@@ -227,6 +227,11 @@ billet ssh-config               # re-render ~/.ssh/config.d/billet.conf with the
 billet connect my-repo          # ProxyJump in, land in the tmux session
 ```
 
+The order matters, but it is forgiving: `ssh-config` reads `remoteUser` live from the Host, so
+running it before `start` simply skips the new Workspace with a warning and still writes every
+other alias — re-run it after `start` to pick the new one up
+([ADR-0010](adr/adr-0010-ssh-config-partial-success.md)).
+
 `connect` runs `tmux new-session -A`, so the session is created on first attach — the
 repo does not need to pre-create it. `tmux_session` is omitted above on purpose: it defaults
 to the Workspace key (`my-repo`), which is what makes the session name identify the Workspace
