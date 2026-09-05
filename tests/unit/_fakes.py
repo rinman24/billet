@@ -182,6 +182,7 @@ class RecordingPlanObserver:
 
     def __init__(self) -> None:
         self.events: list[tuple[str, PlanStep | WorkspacePlanStep]] = []
+        self.outputs: list[str] = []
 
     def step_started(self, step: PlanStep | WorkspacePlanStep) -> None:
         self.events.append(("started", step))
@@ -191,6 +192,10 @@ class RecordingPlanObserver:
 
     def step_failed(self, step: PlanStep | WorkspacePlanStep) -> None:
         self.events.append(("failed", step))
+
+    def step_output(self, step: PlanStep | WorkspacePlanStep, text: str) -> None:
+        self.events.append(("output", step))
+        self.outputs.append(text)
 
 
 _DEFAULT_HOST_METRICS = HostMetrics(
@@ -250,20 +255,25 @@ class FakeContainerAccess:
     way the real access does when the repo has not been cloned onto the Host yet
     (``ConfigError``) or the Host cannot be reached over SSH (``HostOperationError``);
     every other key keeps returning ``facts``.
+
+    ``verify_output`` is what ``verify`` reports as the ``verify_cmd``'s captured output
+    (empty by default, as most tests care only that the step ran).
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 — a fake's knobs are all optional and independent
         self,
         facts: DevcontainerFacts | None = None,
         *,
         running: bool = True,
         uncloned: Sequence[str] = (),
         unreachable: Sequence[str] = (),
+        verify_output: str = "",
     ) -> None:
         self._facts = facts or _DEFAULT_FACTS
         self._running = running
         self._uncloned = frozenset(uncloned)
         self._unreachable = frozenset(unreachable)
+        self.verify_output = verify_output
         self.calls: list[str] = []
         self.personal_bootstrap_cmds: list[str] = []
         self.claude_oauth_tokens: list[str | None] = []
@@ -303,8 +313,9 @@ class FakeContainerAccess:
         self.calls.append("run_personal_bootstrap")
         self.personal_bootstrap_cmds.append(command)
 
-    def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
+    def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> str:
         self.calls.append("verify")
+        return self.verify_output
 
     def compose_stop(
         self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts

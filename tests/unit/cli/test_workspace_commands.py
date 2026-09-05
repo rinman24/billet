@@ -291,6 +291,18 @@ def test_start_with_verify_runs_verify(monkeypatch: pytest.MonkeyPatch, config_f
     assert "verify" in cont.calls
 
 
+def test_start_with_verify_shows_what_the_command_printed(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    _install(monkeypatch, container=FakeContainerAccess(verify_output="pytest 8.3.2\nruff 0.6.9"))
+    result = runner.invoke(app, ["start", "gswa-backend", "--config", str(config_file), "--verify"])
+    assert result.exit_code == 0
+    # A tick alone is worthless: the operator asked for the verify command's own report.
+    assert "verify output" in result.output
+    assert "pytest 8.3.2" in result.output
+    assert "ruff 0.6.9" in result.output
+
+
 def test_start_runs_personal_bootstrap_from_global_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

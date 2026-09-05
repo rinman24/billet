@@ -413,6 +413,36 @@ def test_verify_execs_verify_cmd_in_service_container() -> None:
     assert "exec -T gswa-backend bash -lc 'make test'" in script
 
 
+def test_verify_returns_what_the_command_printed() -> None:
+    # The captured text is the point of the step: a version check whose output is thrown
+    # away tells the operator nothing. The runner replays scripted stdout line by line
+    # through the streaming sink, and verify joins it back with no trailing newline.
+    printed = "pytest 8.3.2\nruff 0.6.9\nmypy 1.11.2"
+    access, _ = _access(lambda _argv: completed(stdout=printed + "\n"))
+    assert access.verify(SPEC, REMOTE, FACTS) == printed
+
+
+def test_verify_failure_carries_the_merged_output_not_the_bare_stderr() -> None:
+    # A verify_cmd is normally a test or build runner, and those report their verdict on
+    # stdout — so the ProcessError the runner raises (stderr only) would render an empty
+    # tail for the one outcome the operator most needs to read.
+    printed = "FAILED tests/test_thing.py::test_it\n1 failed, 12 passed"
+    access, _ = _access(lambda _argv: completed(stdout=printed + "\n", returncode=2, stderr=""))
+    with pytest.raises(ProcessError) as excinfo:
+        access.verify(SPEC, REMOTE, FACTS)
+    assert excinfo.value.returncode == 2
+    assert excinfo.value.stderr == printed
+
+
+def test_verify_failure_falls_back_to_stderr_when_nothing_was_printed() -> None:
+    # Nothing reached the sink (the shell itself failed before the command ran), so the
+    # error keeps whatever the runner captured rather than replacing it with an empty tail.
+    access, _ = _access(lambda _argv: completed(stdout="", returncode=1, stderr="bash: no such"))
+    with pytest.raises(ProcessError) as excinfo:
+        access.verify(SPEC, REMOTE, FACTS)
+    assert excinfo.value.stderr == "bash: no such"
+
+
 def test_compose_stop_is_non_destructive() -> None:
     access, runner = _access(lambda _argv: completed())
     access.compose_stop(SPEC, REMOTE, FACTS)
@@ -458,9 +488,16 @@ def test_compose_up_streams_through_the_constructor_sink() -> None:
     assert seen == ["#5 [2/7] RUN pip install"]
 
 
-def test_only_compose_up_streams() -> None:
-    runner = FakeProcessRunner(lambda argv: completed(stdout=""))
-    access = ComposeContainerAccess(runner, on_compose_line=lambda line: None)
+def test_only_compose_up_reaches_the_client_sink() -> None:
+    # verify streams too, but into a private sink it owns and returns; nothing it prints
+    # may reach the caller-injected sink, which is compose-up's log tail alone. compose_stop
+    # does not stream at all.
+    runner = FakeProcessRunner(lambda argv: completed(stdout="a line\n"))
+    seen: list[str] = []
+    access = ComposeContainerAccess(runner, on_compose_line=seen.append)
     access.compose_stop(SPEC, REMOTE, FACTS)
     access.verify(SPEC, REMOTE, FACTS)
-    assert runner.streamed_calls == []  # every other operation stays buffered
+    assert seen == []
+    assert runner.streamed_calls == [1]  # compose_stop stayed buffered; verify streamed privately
+    access.compose_up(SPEC, REMOTE, FACTS)
+    assert seen == ["a line"]  # only compose_up feeds the client
