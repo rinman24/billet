@@ -113,14 +113,17 @@ RUN sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin -t v2.71.0 \
 # accepted dev-convenience trade-off (also lets the entrypoint start the system sshd).
 # Pre-create dev-owned mountpoints so the runtime named volumes / bind mounts land
 # writable by dev rather than created root:root by the daemon; .ssh is 0700 so the
-# bind-mounted authorized_keys is StrictModes-clean.
+# bind-mounted authorized_keys is StrictModes-clean, and .config/gh 0700 holds the `gh`
+# credential store the compose file persists on a named volume.
 RUN groupadd -g 1000 dev \
     && useradd -u 1000 -g 1000 -m -s /bin/bash dev \
     && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \
     && chmod 0440 /etc/sudoers.d/dev \
     && install -d -o dev -g dev -m 0700 /home/dev/.claude \
     && install -d -o dev -g dev -m 0700 /home/dev/.azure \
-    && install -d -o dev -g dev -m 0700 /home/dev/.ssh
+    && install -d -o dev -g dev -m 0700 /home/dev/.ssh \
+    && install -d -o dev -g dev -m 0700 /home/dev/.config \
+    && install -d -o dev -g dev -m 0700 /home/dev/.config/gh
 
 # Outbound SSH for `dev`: billet's origin is git@github.com:rinman24/billet.git, so
 # keyless push relies on a forwarded SSH agent. accept-new records GitHub's host key on

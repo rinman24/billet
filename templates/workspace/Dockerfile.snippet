@@ -13,13 +13,17 @@ RUN apt-get update \
 # --- 2. Non-root `dev` user (uid/gid 1000) with passwordless sudo ---------------------
 # Required by the entrypoint (it launches the system sshd via sudo) and by billet's
 # connect path (sshd.conf allows only `dev`). uid 1000 aligns with the VM admin user so
-# the repo bind mount needs no chown. Pre-create ~/.ssh 0700 dev-owned so the runtime
-# authorized_keys bind mount lands StrictModes-clean instead of in a root-owned dir.
+# the repo bind mount needs no chown. Pre-create the dev-owned mountpoints the runtime
+# volumes land on, so the daemon does not create them root:root: ~/.ssh 0700 so the
+# authorized_keys bind mount is StrictModes-clean, and ~/.config/gh 0700 for the `gh`
+# credential store the compose snippet persists on a named volume.
 RUN groupadd -g 1000 dev \
     && useradd -u 1000 -g 1000 -m -s /bin/bash dev \
     && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \
     && chmod 0440 /etc/sudoers.d/dev \
-    && install -d -o dev -g dev -m 0700 /home/dev/.ssh
+    && install -d -o dev -g dev -m 0700 /home/dev/.ssh \
+    && install -d -o dev -g dev -m 0700 /home/dev/.config \
+    && install -d -o dev -g dev -m 0700 /home/dev/.config/gh
 
 # --- 3. Bake the sshd hardening drop-in (as root, before any USER directive) ----------
 COPY .devcontainer/sshd.conf /etc/ssh/sshd_config.d/<repo>.conf
