@@ -21,7 +21,7 @@ from billet.contracts import (
     WorkspaceSpec,
 )
 from billet.infrastructure.process import CompletedProcess
-from billet.shared.errors import ProcessError
+from billet.shared.errors import ConfigError, HostOperationError, ProcessError
 
 _DEFAULT_HOST_SPEC = HostSpec(
     key="devbox",
@@ -244,17 +244,42 @@ class FakeSourceAccess:
 
 
 class FakeContainerAccess:
-    """A ContainerAccess that records calls and returns fixed facts / running state."""
+    """A ContainerAccess that records calls and returns fixed facts / running state.
 
-    def __init__(self, facts: DevcontainerFacts | None = None, *, running: bool = True) -> None:
+    ``uncloned`` and ``unreachable`` name the Workspace keys whose ``read_facts`` fails the
+    way the real access does when the repo has not been cloned onto the Host yet
+    (``ConfigError``) or the Host cannot be reached over SSH (``HostOperationError``);
+    every other key keeps returning ``facts``.
+    """
+
+    def __init__(
+        self,
+        facts: DevcontainerFacts | None = None,
+        *,
+        running: bool = True,
+        uncloned: Sequence[str] = (),
+        unreachable: Sequence[str] = (),
+    ) -> None:
         self._facts = facts or _DEFAULT_FACTS
         self._running = running
+        self._uncloned = frozenset(uncloned)
+        self._unreachable = frozenset(unreachable)
         self.calls: list[str] = []
         self.personal_bootstrap_cmds: list[str] = []
         self.claude_oauth_tokens: list[str | None] = []
 
     def read_facts(self, spec: WorkspaceSpec, remote: RemoteHost) -> DevcontainerFacts:
         self.calls.append("read_facts")
+        if spec.key in self._unreachable:
+            raise HostOperationError(
+                f"could not reach {remote.ip} over SSH — is the Host up? "
+                "Run `billet host up` to start it."
+            )
+        if spec.key in self._uncloned:
+            raise ConfigError(
+                f"could not read {spec.repo_dir}/.devcontainer/devcontainer.json on "
+                f"{remote.ip} — is the repo cloned? Run `billet start` to clone it first."
+            )
         return self._facts
 
     def compose_up(
