@@ -239,6 +239,12 @@ billet ssh-config               # re-render ~/.ssh/config.d/billet.conf with the
 billet connect my-repo          # ProxyJump in, land in the tmux session
 ```
 
+`--verify` shows what `verify_cmd` printed — stdout and stderr in the order the command
+emitted them — indented beneath the finished checklist, so a version check is readable off
+the start instead of costing a second round trip. Long output is trimmed to its last 40
+lines with a count of what was elided; `-v` prints it whole, `--quiet` prints none of it. A
+failing `verify_cmd` still fails the start, with its output in the error.
+
 The order matters, but it is forgiving: `ssh-config` reads `remoteUser` live from the Host, so
 running it before `start` simply skips the new Workspace with a warning and still writes every
 other alias — re-run it after `start` to pick the new one up
