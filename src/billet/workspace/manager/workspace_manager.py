@@ -135,7 +135,10 @@ class WorkspaceManager:
         ``None``/empty skips injection. It is never stored on the manager.
 
         The ``observer`` receives semantic started/succeeded/failed events per step (the
-        manager still never prints); a failed step re-raises and aborts the remainder.
+        manager still never prints); a failed step re-raises and aborts the remainder. A
+        step whose product is its own output (``verify``) additionally emits
+        ``step_output`` after it succeeds, so the client can show what the command printed
+        instead of only a tick.
         """
         obs: PlanObserver = observer if observer is not None else NullPlanObserver()
         facts: DevcontainerFacts | None = None
@@ -149,7 +152,7 @@ class WorkspaceManager:
         for step in plan.steps:
             obs.step_started(step)
             try:
-                self._dispatch_start(
+                output = self._dispatch_start(
                     step.kind,
                     spec,
                     remote,
@@ -161,6 +164,8 @@ class WorkspaceManager:
                 obs.step_failed(step)
                 raise
             obs.step_succeeded(step)
+            if output:
+                obs.step_output(step, output)
         return read_facts_once()
 
     def _dispatch_start(  # noqa: PLR0913 — one dispatch arm per step; inputs stay explicit
@@ -171,7 +176,8 @@ class WorkspaceManager:
         facts: Callable[[], DevcontainerFacts],
         personal_bootstrap_cmd: str,
         claude_oauth_token: str | None,
-    ) -> None:
+    ) -> str | None:
+        """Run one step; return the text it printed when the step has any (else ``None``)."""
         if kind is WorkspaceStepKind.ENSURE_SOURCE:
             self._source.ensure_clone(spec, remote)
         elif kind is WorkspaceStepKind.COMPOSE_UP:
@@ -181,7 +187,8 @@ class WorkspaceManager:
         elif kind is WorkspaceStepKind.PERSONAL_BOOTSTRAP:
             self._container.run_personal_bootstrap(spec, remote, facts(), personal_bootstrap_cmd)
         elif kind is WorkspaceStepKind.VERIFY:
-            self._container.verify(spec, remote, facts())
+            return self._container.verify(spec, remote, facts())
+        return None
 
     # --- stop ----------------------------------------------------------------------
 

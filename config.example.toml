@@ -137,7 +137,8 @@ agent_teams_flag   = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
 # .env). Defaults to a no-op (":"). The in-container bootstrap is the devcontainer's own
 # `postCreateCommand` (gswa's is `bash .devcontainer/postcreate.sh`, declared there).
 host_bootstrap_cmd = ":"
-# What `billet start --verify` runs inside the container after a cold bootstrap.
+# What `billet start --verify` runs inside the container after a cold bootstrap. Its
+# output is shown under the checklist (last 40 lines; `-v` shows all).
 verify_cmd         = "make test"
 # Optional. The tmux session `billet connect` attaches (`tmux new-session -A -s …`).
 # DEFAULTS TO THE TABLE KEY — here "gswa-backend" — which is why it is left out: the session

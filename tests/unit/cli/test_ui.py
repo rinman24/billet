@@ -46,6 +46,7 @@ from tests.unit._fakes import make_host_spec, make_workspace_spec
 _START = PlanStep(StepKind.START, "start VM gswa-devbox")
 _WAIT = PlanStep(StepKind.WAIT_REACHABLE, "wait for SSH on gswa-devbox")
 _COMPOSE = WorkspacePlanStep(WorkspaceStepKind.COMPOSE_UP, "docker compose up -d --build")
+_VERIFY = WorkspacePlanStep(WorkspaceStepKind.VERIFY, "run verify command")
 
 
 def _terminal_console() -> Console:
@@ -127,6 +128,84 @@ def test_checklist_ignores_unknown_steps() -> None:
         checklist.step_started(stranger)
         checklist.step_succeeded(stranger)
     assert buffer.getvalue() == ""
+
+
+def _verify_checklist(console: Console) -> PhaseChecklist:
+    """A one-phase checklist whose only row is the step that reports output."""
+    phases = [_ui.Phase(key="workspace:verify", label="verify", group="workspace")]
+    return PhaseChecklist(phases, title="posting api → devbox", console=console)
+
+
+def _numbered(count: int) -> str:
+    return "\n".join(f"line {n}" for n in range(1, count + 1))
+
+
+def test_checklist_piped_prints_step_output_under_a_caption() -> None:
+    console, buffer = _plain_console()
+    checklist = _verify_checklist(console)
+    with checklist:
+        checklist.step_started(_VERIFY)
+        checklist.step_succeeded(_VERIFY)
+        checklist.step_output(_VERIFY, "pytest 8.3.2\nruff 0.6.9")
+    lines = [line for line in buffer.getvalue().splitlines() if line]
+    # Off the Live path the block prints immediately, after the phase's completion line.
+    assert lines == [
+        "  verify … ok",
+        "  verify output",
+        "    pytest 8.3.2",
+        "    ruff 0.6.9",
+    ]
+
+
+def test_checklist_tty_holds_step_output_until_the_live_display_stops() -> None:
+    console = _terminal_console()
+    checklist = _verify_checklist(console)
+    with checklist:
+        checklist.step_started(_VERIFY)
+        checklist.step_succeeded(_VERIFY)
+        checklist.step_output(_VERIFY, "pytest 8.3.2")
+        # Anything printed while Live owns the screen is repainted away, so the block waits.
+        assert "pytest 8.3.2" not in console.export_text()
+    text = console.export_text()
+    assert "verify output" in text
+    assert "pytest 8.3.2" in text
+
+
+def test_checklist_quiet_prints_no_step_output(reset_ui_state: None) -> None:
+    configure(UIState(quiet=True))
+    console, buffer = _plain_console()
+    checklist = _verify_checklist(console)
+    with checklist:
+        checklist.step_output(_VERIFY, "pytest 8.3.2\nruff 0.6.9")
+    assert buffer.getvalue() == ""
+
+
+def test_checklist_step_output_keeps_only_the_tail_by_default() -> None:
+    console, buffer = _plain_console()
+    checklist = _verify_checklist(console)
+    with checklist:
+        checklist.step_output(_VERIFY, _numbered(50))
+    lines = [line for line in buffer.getvalue().splitlines() if line]
+    # A `make test` block can run to thousands of lines; the verdict is in the tail.
+    assert lines[0] == "  verify output"
+    assert lines[1] == "    … 10 earlier lines hidden (-v shows all)"
+    assert lines[2] == "    line 11"
+    assert lines[-1] == "    line 50"
+    assert len(lines) == 42  # caption + elision marker + the last 40 lines
+
+
+def test_checklist_verbose_step_output_is_untrimmed(reset_ui_state: None) -> None:
+    configure(UIState(verbose=True))
+    console, buffer = _plain_console()
+    checklist = _verify_checklist(console)
+    with checklist:
+        checklist.step_output(_VERIFY, _numbered(50))
+    lines = [line for line in buffer.getvalue().splitlines() if line]
+    assert lines[0] == "  verify output"
+    assert lines[1] == "    line 1"
+    assert lines[-1] == "    line 50"
+    assert len(lines) == 51  # caption + all 50 lines, no elision marker
+    assert "earlier lines hidden" not in buffer.getvalue()
 
 
 def test_checklist_total_elapsed_formats_mss() -> None:

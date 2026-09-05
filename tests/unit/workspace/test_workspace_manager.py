@@ -163,6 +163,30 @@ def test_apply_start_emits_started_then_succeeded_for_every_step_in_order() -> N
     assert observer.events == expected
 
 
+def test_apply_start_emits_the_verify_output_after_that_step_succeeded() -> None:
+    container = FakeContainerAccess(verify_output="pytest 8.3.2\nruff 0.6.9")
+    manager, *_ = _manager(container=container)
+    plan = manager.plan_start(SPEC, verify=True)
+    observer = RecordingPlanObserver()
+    manager.apply_start(plan, SPEC, REMOTE, personal_bootstrap_cmd="", observer=observer)
+    verify_step = plan.steps[-1]
+    assert verify_step.kind is WorkspaceStepKind.VERIFY
+    # The output event trails the step's own success — the client ticks the row, then shows
+    # what the command printed, verbatim.
+    assert observer.events[-2:] == [("succeeded", verify_step), ("output", verify_step)]
+    assert observer.outputs == ["pytest 8.3.2\nruff 0.6.9"]
+
+
+def test_apply_start_emits_no_output_event_when_the_step_printed_nothing() -> None:
+    manager, _, container, _ = _manager()  # the default fake's verify_cmd prints nothing
+    plan = manager.plan_start(SPEC, verify=True)
+    observer = RecordingPlanObserver()
+    manager.apply_start(plan, SPEC, REMOTE, personal_bootstrap_cmd="", observer=observer)
+    assert "verify" in container.calls  # the step ran; it simply had nothing to report
+    assert not any(event == "output" for event, _ in observer.events)
+    assert observer.outputs == []
+
+
 def test_apply_start_emits_failed_reraises_and_runs_no_later_steps() -> None:
     class ExplodingContainer(FakeContainerAccess):
         def run_post_create(
