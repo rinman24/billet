@@ -66,16 +66,28 @@ Then merge the two snippets:
 
 - `docker-compose.snippet.yml` into the repo's compose service: the
   `127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-<port>}:22` publish, the entrypoint wiring,
-  `init: true`, the `authorized_keys` bind mount, and the host-keys named volume. Use
-  the Workspace's **own assigned port** as the interpolation default so a manual
-  `docker compose up` on the VM cannot collide with another Workspace's port; billet
-  always exports `BILLET_CONTAINER_SSH_PORT` before compose, so the default never
-  applies under billet.
+  `init: true`, the `authorized_keys` bind mount, the host-keys named volume, and the
+  `<service>_gh_config` named volume on `~/.config/gh`. Use the Workspace's **own
+  assigned port** as the interpolation default so a manual `docker compose up` on the VM
+  cannot collide with another Workspace's port; billet always exports
+  `BILLET_CONTAINER_SSH_PORT` before compose, so the default never applies under billet.
 - `Dockerfile.snippet` into the dev-container image: `openssh-server` + `sudo`, a
   non-root `dev` user (uid/gid 1000 — matches the VM admin user so the bind mount needs
-  no chown), a pre-created `~/.ssh` (0700, dev-owned, so the runtime `authorized_keys`
-  bind mount is StrictModes-clean), and the `COPY` of `sshd.conf` into
+  no chown), pre-created `~/.ssh` and `~/.config/gh` (both 0700, dev-owned, so the
+  runtime `authorized_keys` bind mount is StrictModes-clean and the `gh` volume lands
+  writable by `dev` instead of root-owned), and the `COPY` of `sshd.conf` into
   `/etc/ssh/sshd_config.d/`.
+
+The `gh` volume persists the *credentials*, not the tool. `~/.config/gh/hosts.yml` is
+written on the container filesystem, so without the volume every `compose up --build`
+discards the token and the next `gh` call demands `gh auth login` again; on the named
+volume — dev-owned 0700 from the mountpoint the Dockerfile pre-creates — it survives
+rebuild and recreate, the same pattern as `*_claude_home`
+([ADR-0006](adr/adr-0006-claude-token-injection.md)). Nothing migrates a running
+container's existing token onto the fresh volume, so adopting costs one last
+`gh auth login`. Installing `gh` itself stays the repo's job — a devcontainer *feature*
+will not do it (see above), so bake the binary into the image or install it from
+`postCreateCommand`.
 
 ### Dotfiles: chezmoi (the standard)
 
