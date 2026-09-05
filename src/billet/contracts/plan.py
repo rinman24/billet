@@ -70,6 +70,15 @@ class PlanObserver(Protocol):
         """Handle a step's dispatch raising; the exception then propagates."""
         ...
 
+    def step_output(self, step: PlanStep | WorkspacePlanStep, text: str) -> None:
+        """Handle the text a step's command printed, when the step produces any.
+
+        Fires after :meth:`step_succeeded`, and only for steps whose whole point is what
+        they print (``verify`` today). The manager passes the text through verbatim; how
+        much of it to show — and whether to show it at all — is the client's call.
+        """
+        ...
+
 
 class NullPlanObserver:
     """The silent default observer — every event is a no-op (headless applies)."""
@@ -81,4 +90,7 @@ class NullPlanObserver:
         """Ignore the event."""
 
     def step_failed(self, step: PlanStep | WorkspacePlanStep) -> None:
+        """Ignore the event."""
+
+    def step_output(self, step: PlanStep | WorkspacePlanStep, text: str) -> None:
         """Ignore the event."""

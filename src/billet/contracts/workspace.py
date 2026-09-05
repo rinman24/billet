@@ -177,8 +177,14 @@ class ContainerAccess(Protocol):
         """Run the ``personal_bootstrap_cmd`` in the container, agent-forwarded via its sshd."""
         ...
 
-    def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
-        """Run the Workspace's ``verify_cmd`` inside the service container."""
+    def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> str:
+        """Run the Workspace's ``verify_cmd`` inside the service container; return its output.
+
+        The returned text is what the command printed (stdout and stderr merged in arrival
+        order, newline-joined, no trailing newline) so the client can show it rather than
+        just a tick — a version check is worthless if its output is discarded. A failing
+        command still raises; its output travels in the ``ProcessError``.
+        """
         ...
 
     def compose_stop(

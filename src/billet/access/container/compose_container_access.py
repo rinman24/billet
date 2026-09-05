@@ -22,7 +22,7 @@ from billet.contracts import DevcontainerFacts, RemoteHost, WorkspaceSpec
 from billet.infrastructure import ssh
 from billet.infrastructure.process import OnLine, ProcessRunner
 from billet.shared import jsonc
-from billet.shared.errors import ConfigError, HostOperationError
+from billet.shared.errors import ConfigError, HostOperationError, ProcessError
 
 _DEVCONTAINER_REL = ".devcontainer/devcontainer.json"
 _DEVCONTAINER_DIR = ".devcontainer"
@@ -177,9 +177,28 @@ class ComposeContainerAccess:
         argv = _script_argv(remote, forward_agent=True)
         self._runner.run(argv, input_text=self._personal_bootstrap_script(spec, facts, command))
 
-    def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> None:
-        """Run the Workspace's ``verify_cmd`` in the service container."""
-        self._run_script(remote, self._exec_script(spec, facts, spec.verify_cmd))
+    def verify(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> str:
+        """Run the Workspace's ``verify_cmd`` in the service container; return its output.
+
+        Collected through the streaming seam rather than the buffered one so stdout and
+        stderr come back interleaved in the order the command actually printed them — a
+        buffered run captures the two separately, and concatenating them would reorder a
+        version banner relative to the warning that followed it. Nothing is streamed live:
+        the sink is a local list, and the joined text is handed to the caller to render.
+
+        A failing command is re-raised carrying that same merged text rather than the bare
+        stderr it exited with: a ``verify_cmd`` is typically a test or build runner, which
+        reports its verdict on *stdout*, so the default ``ProcessError`` view would show an
+        empty tail for the one failure the operator most needs to read.
+        """
+        lines: list[str] = []
+        try:
+            self._run_script(
+                remote, self._exec_script(spec, facts, spec.verify_cmd), on_line=lines.append
+            )
+        except ProcessError as exc:
+            raise ProcessError(exc.argv, exc.returncode, "\n".join(lines) or exc.stderr) from exc
+        return "\n".join(lines)
 
     def compose_stop(
         self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts

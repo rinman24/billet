@@ -817,6 +817,11 @@ def _phase_gutter(state: str) -> tuple[str, str]:
 
 _BAR_CELLS = 24
 
+# How many trailing lines of a step's captured output are shown by default. A
+# ``verify_cmd`` like ``make test`` can print thousands of lines; the tail carries the
+# verdict, and ``-v`` lifts the cap entirely.
+_OUTPUT_TAIL_LINES = 40
+
 # The checklist key of the streaming compose-up phase (the log-tail target).
 COMPOSE_UP_KEY = f"workspace:{WorkspaceStepKind.COMPOSE_UP.value}"
 
@@ -850,6 +855,9 @@ class PhaseChecklist:
     degrades to one plain completion line per phase; under ``--quiet`` the checklist is
     silent and only the caller's outcome line prints.
 
+    A step that reports output (``step_output`` — ``verify`` today) has it printed
+    indented beneath the checklist, trimmed to its tail unless ``-v``.
+
     Use as a context manager so the Live display wraps the apply calls.
     """
 
@@ -864,6 +872,8 @@ class PhaseChecklist:
         self._animate: bool = self._console.is_terminal and not self._quiet and not self._verbose
         self._spinner = Spinner(glyphs().spinner, style="building")
         self._live: Live | None = None
+        # Output blocks captured while the Live display owns the screen, printed on exit.
+        self._held_output: list[tuple[str, str]] = []
 
     def __enter__(self) -> Self:
         """Start the Live display (animated path only) and return self as the observer."""
@@ -878,10 +888,13 @@ class PhaseChecklist:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Stop the Live display, leaving the finished checklist on screen."""
+        """Stop the Live display, then flush any held output blocks beneath it."""
         if self._live is not None:
             self._live.__exit__(exc_type, exc_value, traceback)
             self._live = None
+        for label, text in self._held_output:
+            self._print_output(label, text)
+        self._held_output.clear()
 
     # --- PlanObserver events -----------------------------------------------------------
 
@@ -915,6 +928,44 @@ class PhaseChecklist:
             word = "failed" if state == "failed" else "ok"
             style = "error" if state == "failed" else ""
             self._console.print(Text(f"  {phase.label} … {word}", style=style), soft_wrap=True)
+
+    def step_output(self, step: PlanStep | WorkspacePlanStep, text: str) -> None:
+        """Show what the step's command printed, indented under its row.
+
+        Under the animated checklist the block is held until the Live display has stopped —
+        anything printed while Live owns the screen is repainted away — and then lands
+        directly beneath the finished checklist. On the plain paths (``-v``, piped, CI) it
+        prints immediately, after the step's own completion line. ``--quiet`` prints
+        nothing: there, the caller's one outcome line is the whole output.
+        """
+        phase = self._by_key.get(phase_key(step))
+        if phase is None or self._quiet or not text.strip():
+            return
+        if self._animate:
+            self._held_output.append((phase.label, text))
+            return
+        self._print_output(phase.label, text)
+
+    def _print_output(self, label: str, text: str) -> None:
+        """Print one captured block: a muted caption, then the lines indented under it.
+
+        The lines themselves stay unstyled so the block is copy-pasteable (as
+        :func:`block_panel` does); only the caption and the elision marker are muted.
+        Without ``-v`` the block is trimmed to its last :data:`_OUTPUT_TAIL_LINES` lines.
+        """
+        lines: list[str] = text.splitlines()
+        hidden: int = 0
+        if not self._verbose and len(lines) > _OUTPUT_TAIL_LINES:
+            hidden = len(lines) - _OUTPUT_TAIL_LINES
+            lines = lines[-_OUTPUT_TAIL_LINES:]
+        self._console.print(Text(f"  {label} output", style="meta"), soft_wrap=True)
+        if hidden:
+            self._console.print(
+                Text(f"    … {hidden} earlier lines hidden (-v shows all)", style="meta"),
+                soft_wrap=True,
+            )
+        for line in lines:
+            self._console.print(Text(f"    {line}"), soft_wrap=True)
 
     # --- phase-4 seams (fed by the compose-up log stream) --------------------------------
 
