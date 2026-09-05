@@ -43,3 +43,8 @@ VM; the Workspace subsystem (`billet add|ls|start|stop|connect|ssh-config|rm`) c
 builds, bootstraps, and connects a repo's devcontainer on a Host, reading each repo's
 `.devcontainer/devcontainer.json` as a read-only data contract. The Python tool now fully
 replaces the original cloud-devbox shell scripts, which have been removed.
+
+Because those facts are read live, `billet ssh-config` renders only the Workspaces already
+cloned on a running Host; any other is skipped with a warning instead of failing the whole
+run, so one un-started Workspace never withdraws the other aliases
+([ADR-0010](adr/adr-0010-ssh-config-partial-success.md)).
