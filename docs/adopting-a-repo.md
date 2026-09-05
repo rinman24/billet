@@ -48,10 +48,13 @@ verbatim into `.devcontainer/`:
   `sshd -t` fail-fasts, starts sshd via sudo, then `exec "$@"`; and, just before sshd
   starts, it snapshots the container's own environment into `/etc/environment` so image
   `ENV` and compose `environment:` values are visible in sshd login shells.
-- `authorized_keys-stub` — tracked empty fallback so a build away from the VM never
-  hard-fails.
+- `authorized_keys-stub` — tracked empty fallback, mounted whenever
+  `BILLET_AUTHORIZED_KEYS` is unset, so a build away from the VM never hard-fails.
 - `env.example` → save as `.devcontainer/.env.example`, and add `.devcontainer/.env` to
-  the repo's `.gitignore`.
+  the repo's `.gitignore`. It sets exactly one variable,
+  `BILLET_AUTHORIZED_KEYS=/home/azureuser/.ssh/authorized_keys` — the VM path whose keys
+  the container's sshd should trust. (It was `DEVBOX_AUTHORIZED_KEYS` before 2026-09-05;
+  see the compose bullet below.)
 
 That `/etc/environment` snapshot is how **non-secret** image and compose environment reaches
 `billet connect`, tmux, and the fleet runners: an sshd login shell inherits nothing from the
@@ -66,11 +69,14 @@ Then merge the two snippets:
 
 - `docker-compose.snippet.yml` into the repo's compose service: the
   `127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-<port>}:22` publish, the entrypoint wiring,
-  `init: true`, the `authorized_keys` bind mount, the host-keys named volume, and the
-  `<service>_gh_config` named volume on `~/.config/gh`. Use the Workspace's **own
-  assigned port** as the interpolation default so a manual `docker compose up` on the VM
-  cannot collide with another Workspace's port; billet always exports
-  `BILLET_CONTAINER_SSH_PORT` before compose, so the default never applies under billet.
+  `init: true`, the `${BILLET_AUTHORIZED_KEYS:-…}` bind mount of `authorized_keys`, the
+  host-keys named volume, and the `<service>_gh_config` named volume on `~/.config/gh`.
+  Use the Workspace's **own assigned port** as the interpolation default so a manual
+  `docker compose up` on the VM cannot collide with another Workspace's port; billet
+  always exports `BILLET_CONTAINER_SSH_PORT` before compose, so the default never applies
+  under billet. Take the `authorized_keys` mount line whole rather than flattening it: its
+  inner `DEVBOX_AUTHORIZED_KEYS` default is the pre-rename name, kept only so an `.env`
+  already written on a Host keeps working, and removed in billet 0.2.0.
 - `Dockerfile.snippet` into the dev-container image: `openssh-server` + `sudo`, a
   non-root `dev` user (uid/gid 1000 — matches the VM admin user so the bind mount needs
   no chown), pre-created `~/.ssh` and `~/.config/gh` (both 0700, dev-owned, so the
@@ -228,7 +234,13 @@ Three keys carry the tricks:
   `authorized_keys` path on the very first cold start with zero manual steps, and never
   clobbers a hand-edited `.env` (`-n`). Re-running `start` fetches and, when it is safe to
   do so, fast-forwards the Host checkout to upstream (ADR-0007) — this untracked `.env` is
-  not treated as a dirty tree, so it always survives the advance.
+  not treated as a dirty tree, so it always survives the advance. That survival is the one
+  thing to watch after the 2026-09-05 rename: an `.env` written on a Host before it still
+  says `DEVBOX_AUTHORIZED_KEYS`, and neither the fast-forward nor `cp -n` will replace it.
+  Nothing breaks today — the compose mount falls back to the old name when
+  `BILLET_AUTHORIZED_KEYS` is unset — but that fallback is removed in billet 0.2.0, so
+  rename the key in the Host's `.env`, or delete the file and let the next `start` re-copy
+  it from `.env.example`.
 
 Then:
 
