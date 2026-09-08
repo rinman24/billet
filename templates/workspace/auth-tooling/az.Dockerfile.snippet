@@ -1,0 +1,36 @@
+# Optional auth-tooling recipe — the Azure CLI (`az`).
+#
+# Merge into the repo's dev-container Dockerfile ONLY if this Workspace actually calls
+# `az`. A recipe is two halves and needs both: the CLI baked into the image (below) and
+# its credential directory on a named volume (az.docker-compose.snippet.yml). Either half
+# alone still costs a manual step after every rebuild — the CLI is reinstalled by hand,
+# or `az login` is run again.
+#
+# Assumes the base image already has ca-certificates, curl and gnupg (Dockerfile.snippet's
+# apt layer is the natural place to add them if not).
+
+# --- A. Install `az` from Microsoft's apt repository, GPG-pinned ----------------------
+# The same shape as every other third-party source: keyring under /etc/apt/keyrings, a
+# source list pinned to it with signed-by. Microsoft publishes an ASCII-armored key, so
+# it is piped through `gpg --dearmor`. Replace `bookworm` with the base image's Debian
+# suite (or the Ubuntu codename) if it differs. Telemetry is opt-out via the ENV below;
+# drop that line if the repo would rather leave the default.
+ENV AZURE_CORE_COLLECT_TELEMETRY=0
+RUN set -eux; \
+    mkdir -p /etc/apt/keyrings; \
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+        | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg; \
+    echo "deb [signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ bookworm main" \
+        > /etc/apt/sources.list.d/azure-cli.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends azure-cli; \
+    rm -rf /var/lib/apt/lists/*; \
+    az version
+
+# --- B. Pre-create the credential mountpoint, dev-owned ------------------------------
+# Append this line to the `dev` user RUN layer in Dockerfile.snippet §2 — it must run as
+# root, so before the final `USER dev`. Without it the daemon creates the mountpoint
+# root:root on first `up` and `az` cannot write its token cache, so the volume persists
+# an empty, unwritable directory. ~/.azure sits directly in the home directory, so unlike
+# the `gh` recipe there is no parent to pre-create.
+    && install -d -o dev -g dev -m 0700 /home/dev/.azure

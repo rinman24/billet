@@ -11,7 +11,8 @@
 #   - uv (pinned, copied from Astral's distroless image — no curl-pipe-bash)
 #   - the toolchain `make lint`/`test`/`imports` need: ruff + pyright (a Node binary),
 #     import-linter, pytest, shellcheck, make, git
-#   - Claude Code, tmux, and the Azure CLI (billet manages Azure Hosts via `az`)
+#   - Claude Code, tmux, and the two auth CLIs billet's own workflow runs on: the
+#     Azure CLI (billet manages Azure Hosts via `az`) and the GitHub CLI (PR workflow)
 #   - a non-root `dev` user (uid/gid 1000) so `claude --dangerously-skip-permissions`
 #     runs and bind-mount ownership aligns with the VM host (azureuser, uid 1000)
 #   - an in-container sshd (openssh-server + sshd.conf) so billet reaches this repo as a
@@ -44,12 +45,27 @@ WORKDIR /workspace
 # sudo round out the dev workflow; azure-cli is here because billet's job is managing
 # Azure Hosts via `az`. apt sources are GPG-pinned; versions float from the pinned repos,
 # reproducibility comes from the image tag.
+#
+# gh is baked in for the same reason, arrived at the hard way. billet is consumer #1 of
+# its own templates, and templates/workspace/auth-tooling/ is explicit that a recipe is
+# two halves: the CLI in the image (here) and its credential directory on a named volume
+# (billet_gh_config → ~/.config/gh, long since in docker-compose.yml). billet's PR
+# workflow runs on `gh`, but only the credential half had ever been adopted — the binary
+# was installed by hand into ~/.local/bin, which is not on a volume, so every
+# `compose up --build` wiped it and cost a session the same rediscovery. GitHub, unlike
+# nodesource and Microsoft, publishes an already-dearmored keyring, so it is fetched
+# straight into /etc/apt/keyrings; piping it through `gpg --dearmor` as the other two
+# require would be a harmless no-op, but writing it out plainly is what GitHub's own
+# instructions do and keeps the difference between the sources visible.
 RUN set -eux; \
     mkdir -p /etc/apt/keyrings; \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg; \
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list; \
     curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg; \
     echo "deb [signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ bookworm main" > /etc/apt/sources.list.d/azure-cli.list; \
+    curl -fsSL -o /etc/apt/keyrings/githubcli.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg; \
+    chmod 0644 /etc/apt/keyrings/githubcli.gpg; \
+    echo "deb [signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list; \
     echo "deb http://deb.debian.org/debian bookworm-backports main" > /etc/apt/sources.list.d/backports.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -63,7 +79,8 @@ RUN set -eux; \
         sudo \
         shellcheck \
         nodejs \
-        azure-cli; \
+        azure-cli \
+        gh; \
     apt-get install -y --no-install-recommends -t bookworm-backports git; \
     rm -rf /var/lib/apt/lists/*
 

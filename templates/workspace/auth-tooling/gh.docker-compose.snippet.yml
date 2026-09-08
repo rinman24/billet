@@ -1,0 +1,18 @@
+# Optional auth-tooling recipe — the GitHub CLI (`gh`), credential half.
+#
+# Merge into the repo's .devcontainer/docker-compose.yml ONLY if this Workspace actually
+# calls `gh`, together with gh.Dockerfile.snippet (the CLI half). Replace <service> with
+# the compose service devcontainer.json names.
+
+services:
+  <service>:
+    volumes:
+      # Persist the `gh` credential store (hosts.yml) so a `compose up --build` does not
+      # force `gh auth login` again. The token is the operator's, not the image's, so it
+      # belongs on a volume rather than baked in; gh.Dockerfile.snippet §B pre-creates
+      # the mountpoint dev-owned 0700. Note the token is stored in plain text here, as
+      # `gh` itself warns — the volume is as private as the Host it lives on.
+      - <service>_gh_config:/home/dev/.config/gh
+
+volumes:
+  <service>_gh_config:
