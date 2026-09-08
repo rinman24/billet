@@ -215,6 +215,12 @@ host_bootstrap_cmd = "cp -n .devcontainer/.env.example .devcontainer/.env"
 verify_cmd         = "make test"
 ```
 
+Before the first `start`, make sure the key that opens the Host is **loaded in your ssh
+agent**. billet forwards the agent and runs every Host-side git non-interactively, so a
+passphrase-protected key that is not already unlocked cannot be used and cannot prompt —
+the clone fails instead of asking. `ssh-add -l` lists what the agent holds; `ssh-add
+~/.ssh/<key>` (macOS: `ssh-add --apple-use-keychain ~/.ssh/<key>`) loads it.
+
 Three keys carry the tricks:
 
 - `repo_url` — must authenticate **non-interactively** from the Host: an ssh URL reached
@@ -264,9 +270,49 @@ to the Workspace key (`my-repo`), which is what makes the session name identify 
 in `#S` and in stock tmux's default `status-left`. Set it explicitly only to attach to a
 session some other tool already owns.
 
+### Claude credentials in the container
+
+Set `[billet].claude_token_cmd` once, globally, and every Workspace container gets an
+authenticated `claude` with no interactive login and no per-repo change — billet merges the
+token into the container's user-level `~/.claude/settings.json`
+([ADR-0006](adr/adr-0006-claude-token-injection.md)). Generate it with `claude setup-token`,
+store it, and point the command at the store.
+
+On macOS the store step needs an account flag:
+
+```bash
+security add-generic-password -a "$USER" -s billet-claude -w '<token>'
+```
+
+`security` will happily create the item without `-a`, but the read side —
+`security find-generic-password -s billet-claude -w`, which is what `claude_token_cmd`
+runs — then fails to match it, and `start` aborts on empty output. If you hit that, delete
+the item and re-add it with `-a`.
+
+One consequence of injecting a `setup-token` credential: `claude` in the container may show
+a shorter model list than you get locally, because the picker is filtered by what the
+credential is entitled to. The model is still selectable by name —
+
+```bash
+claude --model <name>
+```
+
+— so a model missing from the picker is not a model you have lost.
+
 ## Port ledger
 
-`billet add` enforces per-host port uniqueness, but there is no central reservation —
-keep the assigned ports discoverable by keeping every Workspace (even other operators')
-in `config.toml`. Current convention on the shared devbox: gswa-backend = 2222,
-billet = 2224.
+`billet add` enforces per-host port uniqueness, but there is no central reservation, so
+`config.toml` *is* the ledger — keep every Workspace in it, including other operators', or
+the next `container_ssh_port` cannot be chosen safely.
+
+Allocation starts at 2222 and climbs; the shared devbox currently has 2222 and 2224–2228
+assigned. That range is a snapshot and will age, so read the live answer out of your config
+rather than trusting this line:
+
+```bash
+grep -n container_ssh_port ~/.config/billet/config.toml
+```
+
+`billet add` rejects a collision on the same Host, but only among the Workspaces your
+config knows about — a port another operator assigned and never wrote down is invisible to
+it, and the clash surfaces as a container that will not bind on the next `start`.

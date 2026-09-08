@@ -45,7 +45,10 @@ default_host = "devbox"
 # never interpolates any value into it, reads only STDOUT, surfaces STDERR on failure, and
 # aborts `start` on a non-zero exit / empty output / timeout. The token is never logged and
 # never appears in any argv. Empty (the default) disables the feature entirely.
-# Generate the token once with `claude setup-token`, store it, then point at the store:
+# Generate the token once with `claude setup-token`, store it, then point at the store.
+# Storing it in the macOS Keychain needs an account (-a); `security` accepts the item
+# without one, but `find-generic-password -s ... -w` then fails to match it:
+#   security add-generic-password -a "$USER" -s billet-claude -w '<token>'
 #   macOS Keychain: claude_token_cmd = "security find-generic-password -s billet-claude -w"
 #   1Password:      claude_token_cmd = "op read op://Private/claude-code/token"
 #   HashiCorp Vault: claude_token_cmd = "vault kv get -field=token secret/billet/claude"
