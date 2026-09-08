@@ -75,6 +75,23 @@ If `billet` is still not found after opening a new terminal, your shell may not 
 sourcing the file that was edited — check `echo $ZDOTDIR` and inspect your `.zshenv`,
 `.zprofile`, or `/etc/zshenv` for a config-directory redirect.
 
+### Update
+
+Move an existing install to the latest `main` by re-running the install with
+`--force --reinstall`, then check what you actually got:
+
+```bash
+uv tool install --force --reinstall git+https://github.com/rinman24/billet
+billet version
+```
+
+`uv tool upgrade billet` is the shorter form and often works, but billet installs from an
+unpinned git URL whose requirement string is identical from one release to the next, so
+the upgrade can resolve out of uv's git cache and report success without changing
+anything. `--reinstall` ignores that cache, and `--force` lets the new build replace the
+existing `~/.local/bin/billet`. If `billet version` still reports the old number, run
+`uv cache clean billet` and install again.
+
 ## Usage
 
 ```bash
