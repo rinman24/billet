@@ -132,10 +132,12 @@ RUN printf 'Host github.com\n    StrictHostKeyChecking accept-new\n' > /home/dev
     && chown dev:dev /home/dev/.ssh/config \
     && chmod 0644 /home/dev/.ssh/config
 
-# Per-developer git defaults in dev's home (survive rebuilds): trust the bind-mounted
-# /workspace, and disable commit gpg-signing (no signing key in-container).
-RUN su dev -c 'git config --global safe.directory /workspace' \
-    && su dev -c 'git config --global commit.gpgsign false'
+# Container git infrastructure in dev's home (survives rebuilds): trust the bind-mounted
+# /workspace. Personal git preferences are deliberately not baked into the image —
+# `commit.gpgsign=false`, `user.name` and `user.email` come from `~/.config/git/config`,
+# managed by chezmoi from rinman24/dotfiles and applied by the chezmoi bootstrap in
+# `postCreateCommand` (and by billet's own `personal_bootstrap_cmd` on the billet path).
+RUN su dev -c 'git config --global safe.directory /workspace'
 
 # In-container sshd hardening (key-only, non-root, dev-only, agent-forwarding). Debian's
 # stock sshd_config Includes /etc/ssh/sshd_config.d/*.conf; runtime host keys come from a
