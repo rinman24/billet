@@ -17,9 +17,7 @@ services:
       # the VM's existing authorized_keys — single source of trust. Defaults to an empty
       # tracked stub so a non-VM build never hard-fails. On the VM set
       # BILLET_AUTHORIZED_KEYS in the gitignored .devcontainer/.env (see .env.example).
-      # Deprecated alias: DEVBOX_AUTHORIZED_KEYS is still honoured when
-      # BILLET_AUTHORIZED_KEYS is unset, and that fallback is removed in billet 0.2.0.
-      - ${BILLET_AUTHORIZED_KEYS:-${DEVBOX_AUTHORIZED_KEYS:-./authorized_keys-stub}}:/home/dev/.ssh/authorized_keys:ro
+      - ${BILLET_AUTHORIZED_KEYS:-./authorized_keys-stub}:/home/dev/.ssh/authorized_keys:ro
       # Persisted container SSH host keys → stable identity across rebuild/recreate
       # (stable HostKeyAlias, no known_hosts churn). Generated on first boot if absent.
       - billet-sshd-keys:/etc/ssh/host_keys

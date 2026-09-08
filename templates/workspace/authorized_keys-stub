@@ -2,5 +2,3 @@
 # when BILLET_AUTHORIZED_KEYS is unset, so a build on a machine without the VM's
 # authorized_keys never hard-fails. sshd trusts no keys in that case — set
 # BILLET_AUTHORIZED_KEYS in the gitignored .devcontainer/.env on the VM (see .env.example).
-# The pre-rename name, DEVBOX_AUTHORIZED_KEYS, is still honoured as a fallback until
-# billet 0.2.0.

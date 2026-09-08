@@ -11,14 +11,12 @@ it as a refused ``billet connect`` on the VM, long after the PR that caused it.
 These tests pin the naming rule as a general scan rather than a spot check on one variable:
 every ``${NAME}`` a compose file interpolates and every ``NAME=`` an ``.env`` example assigns
 must carry the prefix, so the *next* mis-prefixed variable is caught by the same assertion.
-The single exception is the pre-rename ``DEVBOX_AUTHORIZED_KEYS`` alias, allow-listed below
-and honoured only as a nested fallback so an ``.env`` already sitting on a VM keeps working.
+``_DEPRECATED_ALIASES`` is the escape hatch for a rename in flight; it is empty, and a name
+added to it is a promise to delete it again.
 
-They also pin the shape of that fallback. The precedence — new name, then deprecated alias,
-then the tracked stub — is the whole point of the nested interpolation: a stale
-``DEVBOX_AUTHORIZED_KEYS`` must not beat a ``BILLET_AUTHORIZED_KEYS`` the operator has since
-set. Order is invisible to a substring match, so it is parsed here. And billet runs itself
-as a Workspace, making it consumer #1 of these templates: the mount is checked in both
+They also pin how the mount resolves — the named variable first, the tracked stub as the
+default — which is what keeps a build away from the VM from hard-failing. And billet runs
+itself as a Workspace, making it consumer #1 of these templates: the mount is checked in both
 ``templates/workspace/`` and billet's own ``.devcontainer/``, because a template change that
 is not mirrored there has never actually been dogfooded.
 """
@@ -39,12 +37,15 @@ _DEVCONTAINER_ENV_EXAMPLE = _REPO_ROOT / ".devcontainer" / ".env.example"
 #: The namespace every billet-owned environment variable lives in.
 _BILLET_PREFIX = "BILLET_"
 
-#: Pre-rename names still honoured as fallbacks, so an ``.env`` written before the rename
-#: keeps working on a VM nobody has revisited. Each entry is a promise to delete: the
-#: compose fallbacks go away in billet 0.2.0 and this allow-list empties out with them.
-_DEPRECATED_ALIASES = frozenset({"DEVBOX_AUTHORIZED_KEYS"})
+#: Pre-rename names still honoured as compose fallbacks while a rename is in flight. Empty:
+#: the ``DEVBOX_AUTHORIZED_KEYS`` fallback was removed in 0.2.0 once every Workspace had
+#: adopted the new name. Each entry added here is a promise to delete it again.
+_DEPRECATED_ALIASES: frozenset[str] = frozenset()
 
 _AUTHORIZED_KEYS_VAR = "BILLET_AUTHORIZED_KEYS"
+
+#: The pre-rename name. No longer resolved by any compose file; still asserted against so a
+#: copy-paste from an old repo cannot quietly bring it back.
 _DEPRECATED_AUTHORIZED_KEYS_VAR = "DEVBOX_AUTHORIZED_KEYS"
 
 #: The tracked empty stub the mount falls back to off-VM, and where it lands in-container.
@@ -249,18 +250,17 @@ def test_every_billet_owned_variable_uses_the_billet_prefix(path: Path) -> None:
     [_TEMPLATE_COMPOSE, _DEVCONTAINER_COMPOSE],
     ids=["template", "devcontainer"],
 )
-def test_the_authorized_keys_mount_prefers_billet_over_the_deprecated_alias(compose: Path) -> None:
-    # Order is the contract, so it is parsed rather than substring-matched: an .env already
-    # on a VM must keep working, *and* a BILLET_AUTHORIZED_KEYS the operator has since set
-    # must win over the stale DEVBOX_AUTHORIZED_KEYS sitting next to it in the same file.
+def test_the_authorized_keys_mount_resolves_from_the_billet_variable_alone(compose: Path) -> None:
+    # Parsed rather than substring-matched so a reintroduced fallback layer is caught too:
+    # 0.2.0 removed the DEVBOX_AUTHORIZED_KEYS default, and a stale name silently winning
+    # again is exactly the drift this module exists to stop.
     chain: _Interpolation = _interpolation_chain(_mount_source(_authorized_keys_mount(compose)))
-    expected: tuple[str, ...] = (_AUTHORIZED_KEYS_VAR, _DEPRECATED_AUTHORIZED_KEYS_VAR)
+    expected: tuple[str, ...] = (_AUTHORIZED_KEYS_VAR,)
     assert chain.names == expected, (
         f"{compose.relative_to(_REPO_ROOT)} resolves the {_AUTHORIZED_KEYS_TARGET} mount from "
-        f"{list(chain.names)}, not {list(expected)}. The nested interpolation must read "
-        f"`${{{_AUTHORIZED_KEYS_VAR}:-${{{_DEPRECATED_AUTHORIZED_KEYS_VAR}:-"
-        f"{_AUTHORIZED_KEYS_STUB}}}}}` so the new name wins and the deprecated one is only a "
-        "fallback (removed in billet 0.2.0)."
+        f"{list(chain.names)}, not {list(expected)}. The interpolation must read "
+        f"`${{{_AUTHORIZED_KEYS_VAR}:-{_AUTHORIZED_KEYS_STUB}}}` — a single level, with no "
+        "pre-rename fallback behind it."
     )
     assert chain.default == _AUTHORIZED_KEYS_STUB, (
         f"{compose.relative_to(_REPO_ROOT)} falls back to `{chain.default}` rather than "
@@ -276,8 +276,8 @@ def test_the_authorized_keys_mount_prefers_billet_over_the_deprecated_alias(comp
 )
 def test_the_env_example_assigns_only_the_new_variable_name(env_example: Path) -> None:
     # The .env.example is the file an operator copies (billet's host_bootstrap_cmd copies it
-    # verbatim), so it is the one place the deprecated alias must not survive — teaching it
-    # would mint fresh .env files that the 0.2.0 fallback removal breaks.
+    # verbatim). Since 0.2.0 the compose has no fallback, so an example teaching the old name
+    # would mint fresh .env files whose value is never read at all.
     assigned: set[str] = _referenced_variables(env_example)
     assert _AUTHORIZED_KEYS_VAR in assigned, (
         f"{env_example.relative_to(_REPO_ROOT)} must set `{_AUTHORIZED_KEYS_VAR}=` so the "
@@ -285,9 +285,8 @@ def test_the_env_example_assigns_only_the_new_variable_name(env_example: Path) -
     )
     assert _DEPRECATED_AUTHORIZED_KEYS_VAR not in assigned, (
         f"{env_example.relative_to(_REPO_ROOT)} still assigns "
-        f"`{_DEPRECATED_AUTHORIZED_KEYS_VAR}`. The alias is honoured as a compose fallback "
-        f"for .env files that predate the rename, but the example teaches only "
-        f"`{_AUTHORIZED_KEYS_VAR}`."
+        f"`{_DEPRECATED_AUTHORIZED_KEYS_VAR}`, which no compose file reads any more — the "
+        f"fallback was removed in 0.2.0. The example must teach `{_AUTHORIZED_KEYS_VAR}`."
     )
 
 

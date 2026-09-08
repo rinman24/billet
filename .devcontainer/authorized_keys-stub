@@ -9,8 +9,6 @@
 #   BILLET_AUTHORIZED_KEYS=/home/azureuser/.ssh/authorized_keys
 # so the same key that opens the VM opens this container (single source of trust; uid
 # 1000 on both sides keeps sshd StrictModes satisfied with no chown).
-#
-# The pre-rename name, DEVBOX_AUTHORIZED_KEYS, is still honoured as a fallback until
-# billet 0.2.0.
+
 #
 # Lines beginning with '#' are ignored by sshd, so this file is a valid empty keyring.

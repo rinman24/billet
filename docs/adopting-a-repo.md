@@ -53,8 +53,7 @@ verbatim into `.devcontainer/`:
 - `env.example` → save as `.devcontainer/.env.example`, and add `.devcontainer/.env` to
   the repo's `.gitignore`. It sets exactly one variable,
   `BILLET_AUTHORIZED_KEYS=/home/azureuser/.ssh/authorized_keys` — the VM path whose keys
-  the container's sshd should trust. (It was `DEVBOX_AUTHORIZED_KEYS` before 2026-09-05;
-  see the compose bullet below.)
+  the container's sshd should trust.
 
 That `/etc/environment` snapshot is how **non-secret** image and compose environment reaches
 `billet connect`, tmux, and the fleet runners: an sshd login shell inherits nothing from the
@@ -74,9 +73,8 @@ Then merge the two snippets:
   Use the Workspace's **own assigned port** as the interpolation default so a manual
   `docker compose up` on the VM cannot collide with another Workspace's port; billet
   always exports `BILLET_CONTAINER_SSH_PORT` before compose, so the default never applies
-  under billet. Take the `authorized_keys` mount line whole rather than flattening it: its
-  inner `DEVBOX_AUTHORIZED_KEYS` default is the pre-rename name, kept only so an `.env`
-  already written on a Host keeps working, and removed in billet 0.2.0.
+  under billet. The `authorized_keys` mount interpolates `BILLET_AUTHORIZED_KEYS` the same
+  way, falling back to the tracked empty stub so a build away from the VM never hard-fails.
 - `Dockerfile.snippet` into the dev-container image: `openssh-server` + `sudo`, a
   non-root `dev` user (uid/gid 1000 — matches the VM admin user so the bind mount needs
   no chown), pre-created `~/.ssh` and `~/.config/gh` (both 0700, dev-owned, so the
@@ -234,13 +232,11 @@ Three keys carry the tricks:
   `authorized_keys` path on the very first cold start with zero manual steps, and never
   clobbers a hand-edited `.env` (`-n`). Re-running `start` fetches and, when it is safe to
   do so, fast-forwards the Host checkout to upstream (ADR-0007) — this untracked `.env` is
-  not treated as a dirty tree, so it always survives the advance. That survival is the one
-  thing to watch after the 2026-09-05 rename: an `.env` written on a Host before it still
-  says `DEVBOX_AUTHORIZED_KEYS`, and neither the fast-forward nor `cp -n` will replace it.
-  Nothing breaks today — the compose mount falls back to the old name when
-  `BILLET_AUTHORIZED_KEYS` is unset — but that fallback is removed in billet 0.2.0, so
-  rename the key in the Host's `.env`, or delete the file and let the next `start` re-copy
-  it from `.env.example`.
+  not treated as a dirty tree, so it always survives the advance. The corollary is that a
+  change to `.env.example` never reaches a Host that already has an `.env` — re-copying the
+  template does not update it and `cp -n` will not overwrite it, so a variable rename has to
+  be applied to each Host's `.env` by hand (or the file deleted, letting the next `start`
+  re-copy it).
 
 Then:
 
