@@ -1,0 +1,39 @@
+# Optional auth-tooling recipe — the GitHub CLI (`gh`).
+#
+# Merge into the repo's dev-container Dockerfile ONLY if this Workspace actually calls
+# `gh`. A recipe is two halves and needs both: the CLI baked into the image (below) and
+# its credential store on a named volume (gh.docker-compose.snippet.yml). Either half
+# alone still costs a manual step after every rebuild — the binary is reinstalled by
+# hand, or `gh auth login` is run again.
+#
+# Assumes the base image already has ca-certificates and curl (Dockerfile.snippet's apt
+# layer is the natural place to add them if not).
+
+# --- A. Install `gh` from GitHub's apt repository, GPG-pinned -------------------------
+# The same shape as every other third-party source: keyring under /etc/apt/keyrings, a
+# source list pinned to it with signed-by. Unlike nodesource's and Microsoft's ASCII
+# keys, GitHub publishes an already-dearmored keyring, so it is fetched as-is rather than
+# piped through `gpg --dearmor`. The `gh` version floats with the pinned repo, exactly as
+# the base image's other apt sources do; reproducibility comes from the base image tag.
+# The alternative — a pinned release tarball into /usr/local/bin — trades that for a
+# manual version bump, and is only worth it if a specific `gh` version is required.
+RUN set -eux; \
+    mkdir -p /etc/apt/keyrings; \
+    curl -fsSL -o /etc/apt/keyrings/githubcli.gpg \
+        https://cli.github.com/packages/githubcli-archive-keyring.gpg; \
+    chmod 0644 /etc/apt/keyrings/githubcli.gpg; \
+    echo "deb [signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gh; \
+    rm -rf /var/lib/apt/lists/*; \
+    gh --version
+
+# --- B. Pre-create the credential mountpoint, dev-owned ------------------------------
+# Append these two lines to the `dev` user RUN layer in Dockerfile.snippet §2 — they must
+# run as root, so before the final `USER dev`. Without them the daemon creates the
+# mountpoint root:root on first `up` and `gh` cannot write hosts.yml, so the volume
+# persists an empty, unwritable directory. `install -d` does not apply -o/-g/-m to the
+# parents it creates, which is why ~/.config is created explicitly too.
+    && install -d -o dev -g dev -m 0700 /home/dev/.config \
+    && install -d -o dev -g dev -m 0700 /home/dev/.config/gh

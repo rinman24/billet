@@ -1,0 +1,17 @@
+# Optional auth-tooling recipe — the Azure CLI (`az`), credential half.
+#
+# Merge into the repo's .devcontainer/docker-compose.yml ONLY if this Workspace actually
+# calls `az`, together with az.Dockerfile.snippet (the CLI half). Replace <service> with
+# the compose service devcontainer.json names.
+
+services:
+  <service>:
+    volumes:
+      # Persist the `az login` (Entra) refresh token so Azure paperwork stays keyless
+      # across a `compose up --build`. The credential is the operator's, not the image's,
+      # so it belongs on a volume rather than baked in; az.Dockerfile.snippet §B
+      # pre-creates the mountpoint dev-owned 0700.
+      - <service>_azure_home:/home/dev/.azure
+
+volumes:
+  <service>_azure_home:
