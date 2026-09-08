@@ -35,7 +35,8 @@ assigns ([ADR-0003](adr/adr-0003-workspace-port-binding-contract.md)).
 `docker compose`, not the devcontainer CLI — the `features` block in
 `devcontainer.json` is VS Code tooling and does not run under `billet start`. Any tool
 a feature would install (e.g. `gh`) must be baked into the image or added to
-`postCreateCommand`.
+`postCreateCommand` — which is why `gh` and `az` ship as
+[opt-in image recipes](#optional-auth-tooling-gh-az) rather than as a `features` entry.
 
 ## Repo-side: the PR to the repository
 
@@ -68,8 +69,8 @@ Then merge the two snippets:
 
 - `docker-compose.snippet.yml` into the repo's compose service: the
   `127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-<port>}:22` publish, the entrypoint wiring,
-  `init: true`, the `${BILLET_AUTHORIZED_KEYS:-…}` bind mount of `authorized_keys`, the
-  host-keys named volume, and the `<service>_gh_config` named volume on `~/.config/gh`.
+  `init: true`, the `${BILLET_AUTHORIZED_KEYS:-…}` bind mount of `authorized_keys`, and
+  the host-keys named volume.
   Use the Workspace's **own assigned port** as the interpolation default so a manual
   `docker compose up` on the VM cannot collide with another Workspace's port; billet
   always exports `BILLET_CONTAINER_SSH_PORT` before compose, so the default never applies
@@ -77,21 +78,35 @@ Then merge the two snippets:
   way, falling back to the tracked empty stub so a build away from the VM never hard-fails.
 - `Dockerfile.snippet` into the dev-container image: `openssh-server` + `sudo`, a
   non-root `dev` user (uid/gid 1000 — matches the VM admin user so the bind mount needs
-  no chown), pre-created `~/.ssh` and `~/.config/gh` (both 0700, dev-owned, so the
-  runtime `authorized_keys` bind mount is StrictModes-clean and the `gh` volume lands
-  writable by `dev` instead of root-owned), and the `COPY` of `sshd.conf` into
+  no chown), a pre-created `~/.ssh` (0700, dev-owned, so the runtime `authorized_keys`
+  bind mount is StrictModes-clean), and the `COPY` of `sshd.conf` into
   `/etc/ssh/sshd_config.d/`.
 
-The `gh` volume persists the *credentials*, not the tool. `~/.config/gh/hosts.yml` is
-written on the container filesystem, so without the volume every `compose up --build`
-discards the token and the next `gh` call demands `gh auth login` again; on the named
-volume — dev-owned 0700 from the mountpoint the Dockerfile pre-creates — it survives
-rebuild and recreate, the same pattern as `*_claude_home`
-([ADR-0006](adr/adr-0006-claude-token-injection.md)). Nothing migrates a running
-container's existing token onto the fresh volume, so adopting costs one last
-`gh auth login`. Installing `gh` itself stays the repo's job — a devcontainer *feature*
-will not do it (see above), so bake the binary into the image or install it from
-`postCreateCommand`.
+Both snippets are sshd-only. They carry nothing beyond what every Workspace needs to be
+reachable — no toolchain, and in particular no authentication tooling.
+
+### Optional: auth tooling (`gh`, `az`)
+
+A Workspace that runs `gh` or `az` opts in by merging a **recipe** from
+[`templates/workspace/auth-tooling/`](https://github.com/rinman24/billet/tree/main/templates/workspace/auth-tooling).
+Take `gh`, `az`, both, or neither — billet itself neither installs these CLIs nor reads
+their credentials ([ADR-0011](adr/adr-0011-optional-auth-tooling-recipes.md)).
+
+A recipe is two halves, and both are required:
+
+| Half | Snippet | Why it is not optional |
+| --- | --- | --- |
+| The CLI, in the image | `<tool>.Dockerfile.snippet` | A *feature* will not install it (see the warning above), so the binary otherwise lands in `~/.local/bin` by hand — which is on no volume, so every `compose up --build` wipes it |
+| Its credentials, on a named volume | `<tool>.docker-compose.snippet.yml` | The token is written to the container filesystem, so without the volume every rebuild demands `gh auth login` / `az login` again |
+
+`gh` mounts `<service>_gh_config` on `~/.config/gh`, `az` mounts `<service>_azure_home` on
+`~/.azure` — the same persistence pattern as `*_claude_home`
+([ADR-0006](adr/adr-0006-claude-token-injection.md)). Adopting only one half looks fine
+until the next rebuild, which is exactly when it is hardest to connect to the merge that
+caused it. [`auth-tooling/README.md`](https://github.com/rinman24/billet/blob/main/templates/workspace/auth-tooling/README.md)
+has the merge detail: which layer each fragment belongs in, why both must precede the final
+`USER dev`, and the caveat that nothing migrates a running container's existing token onto
+the fresh volume — so adopting a recipe costs one last `gh auth login` / `az login`.
 
 ### Dotfiles: chezmoi (the standard)
 
@@ -195,6 +210,10 @@ Sanity checks before merging the PR:
 - `devcontainer.json` declares `service`, `dockerComposeFile`, `workspaceFolder`, and
   `remoteUser: dev`, and its `postCreateCommand` fully bootstraps a cold container.
 - Nothing the repo needs day-to-day hides in a `features` block (see the warning above).
+- If the repo's workflow uses `gh` or `az`, **both** halves of that recipe are merged — the
+  CLI into the Dockerfile, and the credential volume both mounted on the service and
+  declared under the compose file's top-level `volumes:`. A volume that is mounted but
+  never declared fails at `up`, i.e. only on the VM.
 - The compose service's default command keeps the container alive (`sleep infinity`).
 
 ## Operator-side: config + first start
