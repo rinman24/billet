@@ -86,11 +86,21 @@ every Docker named volume mounted under `/home/dev`:
 
 | Target state | What happens | Log line |
 | --- | --- | --- |
-| directory, owned by uid 0, empty | `sudo -n install -d -o <uid> -g <gid> -m 0700` | `dev-entrypoint: repaired <path> (was root:root <mode>)` |
+| directory, owned by uid 0, empty | `sudo -n install -d -o <uid> -g <gid> -m 0700` | `dev-entrypoint: repaired <path> (was root:<group> <mode>)` |
 | directory, owned by uid 0, populated | left alone | `dev-entrypoint: warning: <path> is root-owned and not empty; not repaired` |
 | directory, owned by another uid | left alone | `dev-entrypoint: warning: <path> owned by uid <n>; not repaired` |
 | directory, owned by the login user | left alone, mode included | none |
-| the repair itself fails | sshd still starts | `dev-entrypoint: warning: repair of <path> failed; continuing` |
+| directory that cannot be `stat`ed | left alone | `dev-entrypoint: warning: cannot stat <path>; not repaired` |
+| directory whose entries cannot be listed | left alone | `dev-entrypoint: warning: cannot read <path>; not repaired` |
+| missing, where the rule is applied with creation (`~/.ssh`) | `sudo -n install -d -o <uid> -g <gid> -m 0700` | `dev-entrypoint: created <path>` |
+| not a directory, or missing without creation | skipped | none |
+| the repair or the creation fails | sshd still starts | `dev-entrypoint: warning: repair of <path> failed; continuing` |
+
+Every line carries a `dev-entrypoint: ` prefix; the warnings carry a further `warning: `
+and go to stderr. A root-owned, **0700**, empty directory takes the `cannot read` row
+rather than the repair row — the entrypoint runs as the login user, so it cannot list the
+directory and cannot establish that it is empty. Docker's own mountpoints come up 0755, so
+every target this exists for still takes the repair row.
 
 `~/.ssh` gets the same rule applied to a known path (created dev-owned 0700 if missing),
 because sshd's `authorized_keys` bind mount lives under it; it is Berth infrastructure,
