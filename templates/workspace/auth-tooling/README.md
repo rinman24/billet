@@ -5,39 +5,54 @@ Hosts is its job — a repo whose workflow is pull requests lives on `gh`, and p
 Workspaces need neither. So neither CLI is in the base templates: a Workspace opts into
 the ones it actually uses, and one that opts into nothing carries nothing extra.
 
-A recipe is **two halves, and both are required**:
+A recipe is **two parts, and both are required**:
 
-| Half | What it does | Why it is not optional |
+| Part | What it does | Why it is not optional |
 | --- | --- | --- |
-| CLI in the image | apt-installs the tool from its GPG-pinned source | Without it the binary is installed by hand into `~/.local/bin`, which is not on a volume, so every `compose up --build` wipes it |
-| Credential dir on a named volume | mounts the tool's config directory | Without it the container filesystem holds the token, so every rebuild forces `gh auth login` / `az login` again |
+| Binary — the CLI in the image | apt-installs the tool from its GPG-pinned source | Without it the binary is installed by hand into `~/.local/bin`, which is not on a volume, so every `compose up --build` wipes it |
+| Volume — the tool's Locker | mounts a named volume on the tool's config directory | Without it the container filesystem holds the token, so every rebuild forces `gh auth login` / `az login` again |
 
-Adopting one half only is the failure this exists to end: it looks like it works until the
+There is no third part. Earlier revisions asked the Dockerfile to pre-create each Locker's
+mountpoint `dev`-owned before `USER dev`; the Berth entrypoint now re-owns a root-owned,
+empty Locker to the login user at container start, and billet's token injection does the
+same for `~/.claude` before it writes
+([ADR-0013](../../../docs/adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)).
+A Locker is declared in exactly one place — the compose file — and no image release is
+needed to add one.
+
+Adopting one part only is the failure this exists to end: it looks like it works until the
 next rebuild, and then costs a session the same rediscovery.
 
 ## The recipes
 
-| Recipe | Merge into | Provides | Volume |
+| Recipe | Part | Merge into | Provides |
 | --- | --- | --- | --- |
-| `gh.Dockerfile.snippet` | the repo's dev-container Dockerfile | `gh` from `cli.github.com/packages` | — |
-| `gh.docker-compose.snippet.yml` | `.devcontainer/docker-compose.yml` | — | `<service>_gh_config` → `~/.config/gh` |
-| `az.Dockerfile.snippet` | the repo's dev-container Dockerfile | `azure-cli` from `packages.microsoft.com` | — |
-| `az.docker-compose.snippet.yml` | `.devcontainer/docker-compose.yml` | — | `<service>_azure_home` → `~/.azure` |
+| `gh.Dockerfile.snippet` | binary | the repo's dev-container Dockerfile | `gh` from `cli.github.com/packages` |
+| `gh.docker-compose.snippet.yml` | volume | `.devcontainer/docker-compose.yml` | `<service>_gh_config` → `~/.config/gh` |
+| `az.Dockerfile.snippet` | binary | the repo's dev-container Dockerfile | `azure-cli` from `packages.microsoft.com` |
+| `az.docker-compose.snippet.yml` | volume | `.devcontainer/docker-compose.yml` | `<service>_azure_home` → `~/.azure` |
 
 Take `gh`, `az`, both, or neither. Placeholders match the base templates: `<service>` is
-the compose service `devcontainer.json` names.
+the compose service `devcontainer.json` names. Keep the volume suffixes as shipped
+(`_gh_config`, `_azure_home`) — they are the canonical Locker names; a repo that already
+carries an older name (`claude_home`, `genshift-brand_gh_config`, …) keeps it.
+
+**The `az` binary part requires a consumer-built image.** The shared toolchain image never
+ships `azure-cli`, so a Workspace whose Dockerfile is a bare `FROM` of that image cannot
+take `az.Dockerfile.snippet`: it either builds its own image or leaves `az` out. `gh` is in
+the shared image already, so on that image the `gh` recipe reduces to its volume part.
 
 ## Adopting one
 
-1. Merge the recipe's **Dockerfile** snippet: section A as its own layer, section B's
-   `install -d` lines appended to the `dev` user RUN layer in
-   [`../Dockerfile.snippet`](../Dockerfile.snippet) §2. Both must precede the final
-   `USER dev` — setting ownership needs root.
+1. Merge the recipe's **Dockerfile** snippet as its own layer, before the final `USER dev`
+   (apt needs root). Skip this step on an image that already ships the binary.
 2. Merge the recipe's **compose** snippet: the mount into the service's `volumes:` list,
    and the volume name into the file's top-level `volumes:` mapping. A named volume that
    is mounted but not declared fails at `up`, i.e. only on the VM.
-3. The Dockerfile half only takes effect on a rebuild — the next `billet start`
-   (`compose up -d --build`) does it.
+3. The Dockerfile part only takes effect on a rebuild — the next `billet start`
+   (`compose up -d --build`) does it. The volume part takes effect on the next container
+   create; the entrypoint's repair line (`dev-entrypoint: repaired …`) in
+   `docker compose logs` confirms a fresh Locker was re-owned.
 4. Authenticate once (`gh auth login`, `az login`). It persists from then on. An existing
    container's current credentials are *not* migrated onto the fresh volume, so the first
    login after adopting happens one more time.

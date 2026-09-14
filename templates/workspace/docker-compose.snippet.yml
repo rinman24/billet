@@ -8,19 +8,33 @@
 # exported before every compose call (ADR-0003).
 #
 # Authentication tooling (`gh`, `az`) is deliberately NOT here: not every Workspace needs
-# either, so it is opt-in per repo. See auth-tooling/README.md.
+# either, so it is opt-in per repo. See auth-tooling/README.md. The one Locker below is
+# Claude's: every billet Workspace receives a token (ADR-0006), so it is not opt-in.
 
 services:
   <service>:
+    environment:
+      # Pin Claude Code's config directory to the Locker below. The value is fixed:
+      # billet's token injection writes ~/.claude/settings.json (ADR-0006), so any other
+      # path would split what the injector writes from what `claude` reads. Compose
+      # `environment:` reaches `docker compose exec` directly and ssh login shells via the
+      # entrypoint's /etc/environment snapshot, so both paths agree.
+      CLAUDE_CONFIG_DIR: /home/dev/.claude
     volumes:
       # Container sshd trusts the operator's forwarded key via a read-only bind-mount of
-      # the VM's existing authorized_keys — single source of trust. Defaults to the empty
-      # tracked stub so a non-VM build never hard-fails. On the VM set
-      # BILLET_AUTHORIZED_KEYS in the gitignored .devcontainer/.env (see .env.example).
+      # the VM's existing authorized_keys — single source of trust. billet exports
+      # BILLET_AUTHORIZED_KEYS (the Host admin user's ~/.ssh/authorized_keys) before every
+      # compose call, so no .env is involved; the default is the empty tracked stub, so a
+      # build away from the VM never hard-fails.
       - ${BILLET_AUTHORIZED_KEYS:-./authorized_keys-stub}:/home/dev/.ssh/authorized_keys:ro
       # Persisted container SSH host keys → stable identity across rebuild/recreate
       # (stable HostKeyAlias, no known_hosts churn). Generated on first boot if absent.
       - <service>-sshd-keys:/etc/ssh/host_keys
+      # The Claude Locker — the ADR-0006 target. Persists the injected token, Claude Code's
+      # auth state and auto-memory across image rebuilds. The image need NOT pre-create the
+      # mountpoint: the Berth entrypoint re-owns a root-owned, empty Locker to `dev` at
+      # container start, and billet's injection does the same before it writes (ADR-0013).
+      - <service>_claude_home:/home/dev/.claude
     # Bring up the in-container sshd, then run the CMD (`sleep infinity`). `bash <script>`
     # avoids any dependence on the bind-mounted file's exec bit.
     entrypoint: ["bash", "<workspaceFolder>/.devcontainer/dev-entrypoint.sh"]
@@ -34,3 +48,4 @@ services:
 
 volumes:
   <service>-sshd-keys:
+  <service>_claude_home:

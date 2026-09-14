@@ -5,10 +5,10 @@
 # VM's authorized_keys. With only this stub, the container's sshd trusts no keys (you
 # simply can't ssh in) — harmless.
 #
-# On the gswa-devbox VM, set in the gitignored .devcontainer/.env:
-#   BILLET_AUTHORIZED_KEYS=/home/azureuser/.ssh/authorized_keys
-# so the same key that opens the VM opens this container (single source of trust; uid
-# 1000 on both sides keeps sshd StrictModes satisfied with no chown).
+# On the VM billet exports BILLET_AUTHORIZED_KEYS=/home/<admin_user>/.ssh/authorized_keys
+# before every compose call, so the same key that opens the VM opens this container
+# (single source of trust; uid 1000 on both sides keeps sshd StrictModes satisfied with
+# no chown). No .env file is involved.
 
 #
 # Lines beginning with '#' are ignored by sshd, so this file is a valid empty keyring.
