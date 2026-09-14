@@ -8,6 +8,20 @@ carries into a Workspace are *not* secrets and reasoned only about a port number
 adds a value that **is** a secret (a Claude Code OAuth token) and therefore must reach
 `claude` by a path that is safe for a credential — never an environment export over SSH.
 
+Amended (2026-09-14): the `*_claude_home` volume the Decision relies on is now shipped by the
+base `docker-compose.snippet.yml` as the Claude **Locker** ([ADR-0012](adr-0012-the-berth.md)
+for the noun), rather than left to each consumer to invent; existing consumer volume names stay
+grandfathered. The same snippet sets `CLAUDE_CONFIG_DIR=/home/dev/.claude` under
+`environment:` so Claude Code's account state (`.claude.json`) lands on the same volume as the
+injected `settings.json`; the value is fixed because the merge program hardcodes
+`~/.claude/settings.json`, and any other path would split the two. And the injection now
+repairs its own target before writing: in the same `exec -u <remote_user>` session, a
+root-owned **empty** `~/.claude` is made login-user-owned under the policy of
+[ADR-0013](adr-0013-mountpoint-ownership-repaired-at-mount-time.md) item 6, and the merge
+program's `not exists()` guard becomes a writability check that fails with a `[billet]`-prefixed
+error naming the directory's owner instead of a traceback. Token delivery — stdin only, never
+argv — is unchanged.
+
 ## Context
 
 `claude` running inside a Workspace container must be authenticated, but the two ways
