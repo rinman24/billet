@@ -10,6 +10,21 @@ changes, and [ADR-0002](adr-0002-workspace-subsystem.md) §1's rule that the rep
 own `.devcontainer/` is untouched — this ADR settles what billet *ships as a suggestion*,
 never what it applies.
 
+Amended (2026-09-14) by
+[ADR-0013](adr-0013-mountpoint-ownership-repaired-at-mount-time.md): a recipe is **two
+parts** — the CLI in the image and its credential volume in compose (its **Locker**,
+[ADR-0012](adr-0012-the-berth.md)) — and no longer includes an image-side mountpoint. The Berth
+entrypoint repairs a root-owned empty mount target at container start, so the §B `install -d`
+lines are gone from both recipe Dockerfile snippets, and the rule under "A recipe is two
+halves, and both are required" is restated: both parts are still required, and *the mountpoint
+is unnecessary*. The failure table below loses its "credential volume only → unwritable" row;
+the residual broken row is "volume without CLI". Two further corrections: the `az` recipe's
+binary part cannot be adopted by a Workspace built from the shared GenShift toolchain image (a
+one-line `FROM`), which never ships `azure-cli` — such a Workspace needs a consumer-built image;
+and the reason validation stays out of `start` is sufficiency, not ownership
+([ADR-0014](adr-0014-definition-versus-state.md) item 5). The opt-in rule and "nothing goes
+into billet" are unchanged.
+
 ## Context
 
 Two independent facts about how billet runs a Workspace collided in the templates.

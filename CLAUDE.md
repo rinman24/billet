@@ -23,7 +23,11 @@ The swappable `HostProvider` Protocol is the one seam that earns its abstraction
 (Azure VM today; DevPod / Dev Box later).
 
 Ubiquitous language: **Host** (a cloud VM), **Workspace** (a repo's devcontainer on a Host),
-**HostProvider** (the backend seam), **devbox** (informal name for the shared Host).
+**HostProvider** (the backend seam), **Berth** (the Workspace runtime contract billet publishes
+under `templates/workspace/`, versioned by `berth.version`), **Locker** (one named compose
+volume persisting one tool's state under the login user's home). The full glossary, the
+context map of the collaborating repositories and the open questions are in
+`docs/CONTEXT-MAP.md`.
 
 ## Ownership boundary (ADR-0005)
 

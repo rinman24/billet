@@ -6,6 +6,15 @@ Accepted (2026-06-30). Builds on [ADR-0001](adr-0001-closed-architecture-decompo
 and governs the Workspace subsystem (slice 5): `billet add | ls | start | stop | connect |
 ssh-config | rm`.
 
+Amended (2026-09-14): [ADR-0012](adr-0012-the-berth.md) names the runtime surface the
+Workspace templates publish the **Berth** and gives it a version; §1's rule — the repo owns its
+`.devcontainer/`, billet reads five fields of `devcontainer.json` and writes none of it — is
+unchanged, and [ADR-0014](adr-0014-definition-versus-state.md) restates it as the
+definition/state boundary. [ADR-0015](adr-0015-billet-doctor.md) **proposes** widening §1 so a
+`doctor` verb may open the compose files billet already resolves by name. That grant is not yet
+in effect: nothing in billet opens a compose file, and the amendment takes effect only when
+`doctor` lands (ADR-0014 item 4).
+
 ## Context
 
 The Host subsystem (ADR-0001) makes a cloud VM exist, reachable, and adopted. The Workspace
