@@ -50,11 +50,10 @@ verbatim into `.devcontainer/`:
   starts, it snapshots the container's own environment into `/etc/environment` so image
   `ENV` and compose `environment:` values are visible in sshd login shells.
 - `authorized_keys-stub` — tracked empty fallback, mounted whenever
-  `BILLET_AUTHORIZED_KEYS` is unset, so a build away from the VM never hard-fails.
-- `env.example` → save as `.devcontainer/.env.example`, and add `.devcontainer/.env` to
-  the repo's `.gitignore`. It sets exactly one variable,
-  `BILLET_AUTHORIZED_KEYS=/home/azureuser/.ssh/authorized_keys` — the VM path whose keys
-  the container's sshd should trust.
+  `BILLET_AUTHORIZED_KEYS` is unset, so a build away from the VM never hard-fails. Under
+  billet it is never unset: `start` exports the Host admin user's
+  `~/.ssh/authorized_keys` before every compose call, so the same key that opens the Host
+  opens the container with no file to copy.
 
 That `/etc/environment` snapshot is how **non-secret** image and compose environment reaches
 `billet connect`, tmux, and the fleet runners: an sshd login shell inherits nothing from the
@@ -69,21 +68,29 @@ Then merge the two snippets:
 
 - `docker-compose.snippet.yml` into the repo's compose service: the
   `127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-<port>}:22` publish, the entrypoint wiring,
-  `init: true`, the `${BILLET_AUTHORIZED_KEYS:-…}` bind mount of `authorized_keys`, and
-  the host-keys named volume.
+  `init: true`, the `${BILLET_AUTHORIZED_KEYS:-…}` bind mount of `authorized_keys`, the
+  host-keys named volume, and the Claude Locker — `<service>_claude_home` on `~/.claude`
+  with `CLAUDE_CONFIG_DIR: /home/dev/.claude` under `environment:`. The Locker is where
+  the token billet injects lands ([ADR-0006](adr/adr-0006-claude-token-injection.md)); the
+  variable pins `claude` to the same directory, and its value is fixed because the injector
+  hardcodes `~/.claude/settings.json`. No image-side mountpoint is needed: the entrypoint
+  re-owns a fresh Locker at start
+  ([ADR-0013](adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)).
   Use the Workspace's **own assigned port** as the interpolation default so a manual
   `docker compose up` on the VM cannot collide with another Workspace's port; billet
   always exports `BILLET_CONTAINER_SSH_PORT` before compose, so the default never applies
   under billet. The `authorized_keys` mount interpolates `BILLET_AUTHORIZED_KEYS` the same
-  way, falling back to the tracked empty stub so a build away from the VM never hard-fails.
+  way — also exported by billet — falling back to the tracked empty stub so a build away
+  from the VM never hard-fails.
 - `Dockerfile.snippet` into the dev-container image: `openssh-server` + `sudo`, a
   non-root `dev` user (uid/gid 1000 — matches the VM admin user so the bind mount needs
   no chown), a pre-created `~/.ssh` (0700, dev-owned, so the runtime `authorized_keys`
   bind mount is StrictModes-clean), and the `COPY` of `sshd.conf` into
   `/etc/ssh/sshd_config.d/`.
 
-Both snippets are sshd-only. They carry nothing beyond what every Workspace needs to be
-reachable — no toolchain, and in particular no authentication tooling.
+Both snippets carry nothing beyond what every Workspace needs — no toolchain, and no
+authentication tooling. The one Locker the compose snippet ships is Claude's, because every
+Workspace receives a token; `gh` and `az` Lockers are the volume part of their recipes.
 
 ### Optional: auth tooling (`gh`, `az`)
 
@@ -92,21 +99,25 @@ A Workspace that runs `gh` or `az` opts in by merging a **recipe** from
 Take `gh`, `az`, both, or neither — billet itself neither installs these CLIs nor reads
 their credentials ([ADR-0011](adr/adr-0011-optional-auth-tooling-recipes.md)).
 
-A recipe is two halves, and both are required:
+A recipe is two parts, and both are required:
 
-| Half | Snippet | Why it is not optional |
+| Part | Snippet | Why it is not optional |
 | --- | --- | --- |
-| The CLI, in the image | `<tool>.Dockerfile.snippet` | A *feature* will not install it (see the warning above), so the binary otherwise lands in `~/.local/bin` by hand — which is on no volume, so every `compose up --build` wipes it |
-| Its credentials, on a named volume | `<tool>.docker-compose.snippet.yml` | The token is written to the container filesystem, so without the volume every rebuild demands `gh auth login` / `az login` again |
+| Binary — the CLI, in the image | `<tool>.Dockerfile.snippet` | A *feature* will not install it (see the warning above), so the binary otherwise lands in `~/.local/bin` by hand — which is on no volume, so every `compose up --build` wipes it |
+| Locker — its credentials, on a named volume | `<tool>.docker-compose.snippet.yml` | The token is written to the container filesystem, so without the volume every rebuild demands `gh auth login` / `az login` again |
 
 `gh` mounts `<service>_gh_config` on `~/.config/gh`, `az` mounts `<service>_azure_home` on
-`~/.azure` — the same persistence pattern as `*_claude_home`
-([ADR-0006](adr/adr-0006-claude-token-injection.md)). Adopting only one half looks fine
-until the next rebuild, which is exactly when it is hardest to connect to the merge that
-caused it. [`auth-tooling/README.md`](https://github.com/rinman24/billet/blob/main/templates/workspace/auth-tooling/README.md)
-has the merge detail: which layer each fragment belongs in, why both must precede the final
-`USER dev`, and the caveat that nothing migrates a running container's existing token onto
-the fresh volume — so adopting a recipe costs one last `gh auth login` / `az login`.
+`~/.azure` — the same persistence pattern as `<service>_claude_home`
+([ADR-0006](adr/adr-0006-claude-token-injection.md)). There is no third, image-side part:
+the entrypoint re-owns a fresh Locker at container start
+([ADR-0013](adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)), so a Locker is
+one compose `volumes:` line and nothing else. Adopting only one part looks fine until the
+next rebuild, which is exactly when it is hardest to connect to the merge that caused it.
+[`auth-tooling/README.md`](https://github.com/rinman24/billet/blob/main/templates/workspace/auth-tooling/README.md)
+has the merge detail: where the binary part goes, why the `az` binary part requires a
+consumer-built image (the shared toolchain image never ships `azure-cli`), and the caveat
+that nothing migrates a running container's existing token onto the fresh volume — so
+adopting a recipe costs one last `gh auth login` / `az login`.
 
 ### Dotfiles: chezmoi (the standard)
 
@@ -210,10 +221,10 @@ Sanity checks before merging the PR:
 - `devcontainer.json` declares `service`, `dockerComposeFile`, `workspaceFolder`, and
   `remoteUser: dev`, and its `postCreateCommand` fully bootstraps a cold container.
 - Nothing the repo needs day-to-day hides in a `features` block (see the warning above).
-- If the repo's workflow uses `gh` or `az`, **both** halves of that recipe are merged — the
-  CLI into the Dockerfile, and the credential volume both mounted on the service and
-  declared under the compose file's top-level `volumes:`. A volume that is mounted but
-  never declared fails at `up`, i.e. only on the VM.
+- If the repo's workflow uses `gh` or `az`, **both** parts of that recipe are merged — the
+  binary into the Dockerfile (or already in the image), and its Locker both mounted on the
+  service and declared under the compose file's top-level `volumes:`. A volume that is
+  mounted but never declared fails at `up`, i.e. only on the VM.
 - The compose service's default command keeps the container alive (`sleep infinity`).
 
 ## Operator-side: config + first start
@@ -230,7 +241,6 @@ repo_dir           = "my-repo"
 container_ssh_port = 2225                    # distinct per Host; `billet add` validates
 host_alias         = "gswa-devbox"           # same alias as the shared Host
 container_alias    = "my-repo-container"     # distinct per Workspace
-host_bootstrap_cmd = "cp -n .devcontainer/.env.example .devcontainer/.env"
 verify_cmd         = "make test"
 ```
 
@@ -252,16 +262,22 @@ Three keys carry the tricks:
 - `container_ssh_port` — pick the next free loopback port on that Host;
   `billet add` rejects a duplicate. Use the same number as the compose default you put
   in the repo.
-- `host_bootstrap_cmd` — runs in `repo_dir` on the Host before every `compose up`.
-  `cp -n .devcontainer/.env.example .devcontainer/.env` wires the real
-  `authorized_keys` path on the very first cold start with zero manual steps, and never
-  clobbers a hand-edited `.env` (`-n`). Re-running `start` fetches and, when it is safe to
-  do so, fast-forwards the Host checkout to upstream (ADR-0007) — this untracked `.env` is
-  not treated as a dirty tree, so it always survives the advance. The corollary is that a
-  change to `.env.example` never reaches a Host that already has an `.env` — re-copying the
-  template does not update it and `cp -n` will not overwrite it, so a variable rename has to
-  be applied to each Host's `.env` by hand (or the file deleted, letting the next `start`
-  re-copy it).
+- `host_bootstrap_cmd` — optional; a general hook that runs in `repo_dir` on the Host
+  before every `compose up`, defaulting to a no-op (`":"`), which is why the block above
+  omits it. Nothing about `authorized_keys` belongs here: billet exports
+  `BILLET_AUTHORIZED_KEYS` (the Host admin user's `~/.ssh/authorized_keys`) and
+  `BILLET_CONTAINER_SSH_PORT` itself before every compose call. Re-running `start`
+  fetches and, when it is safe to do so, fast-forwards the Host checkout to upstream
+  (ADR-0007); untracked files a hook writes are not treated as a dirty tree, so they
+  survive the advance.
+
+**Migrating from billet < 0.4.0.** Earlier versions set `BILLET_AUTHORIZED_KEYS` through a
+`.env` file, wired by `host_bootstrap_cmd = "cp -n .devcontainer/.env.example
+.devcontainer/.env"`. Delete those two lines from `~/.config/billet/config.toml` (one per
+Workspace that carried it) and drop `.env.example` from the repo's `.devcontainer/`. The
+untracked `.env` already on a Host is inert — a shell export outranks compose's `.env`
+interpolation — so nothing on the Host needs deleting, and the hook itself is not
+deprecated.
 
 Then:
 
