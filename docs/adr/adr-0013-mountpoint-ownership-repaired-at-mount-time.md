@@ -86,12 +86,23 @@ performs into a container makes its own target writable first.**
 
    | Target state | Action |
    |---|---|
-   | directory, owned by uid 0, **empty** | `sudo -n install -d -o <uid> -g <gid> -m 0700 <target>`; log `repaired <path> (was root:root <mode>)` |
-   | directory, owned by uid 0, populated | warn `is root-owned and not empty; not repaired` |
-   | directory, owned by another uid | warn `owned by uid <n>; not repaired` |
+   | directory, owned by uid 0, **empty** | `sudo -n install -d -o <uid> -g <gid> -m 0700 <target>`; log `repaired <path> (was root:<group> <mode>)` |
+   | directory, owned by uid 0, populated | warn `<path> is root-owned and not empty; not repaired` |
+   | directory, owned by another uid | warn `<path> owned by uid <n>; not repaired` |
    | directory, owned by the login user | leave alone, mode included |
-   | not a directory | skip silently |
-   | repair fails | warn `repair of <path> failed; continuing` |
+   | directory that cannot be `stat`ed | warn `cannot stat <path>; not repaired` |
+   | directory whose entries cannot be listed | warn `cannot read <path>; not repaired` |
+   | missing, where the rule is applied with creation (item 3) | `sudo -n install -d -o <uid> -g <gid> -m 0700 <path>`; log `created <path>` |
+   | not a directory, or missing without creation | skip silently |
+   | repair or creation fails | warn `repair of <path> failed; continuing` |
+
+   Every line above is emitted with a `dev-entrypoint: ` prefix; the warnings carry a further
+   `warning: ` and go to stderr. A root-owned, **0700**, empty directory is reported by the
+   `cannot read` row rather than repaired: the entrypoint runs as the login user, so it cannot
+   list the directory and so cannot establish that it is empty. That state is unreachable for a
+   mountpoint Docker creates — those come up 0755 (cell 1) — so every target this decision
+   exists for still takes the repair row; it can only arise if something other than the daemon
+   created the path root-owned 0700.
 
    Never recursive. Never `chown -R`. Never abort: sshd is the operator's recovery path, so the
    entrypoint continues to start it (the posture #62 chose for host-key persistence). Every repair
@@ -99,7 +110,8 @@ performs into a container makes its own target writable first.**
    `docker compose logs` rather than silently working.
 
 3. **`~/.ssh` is ensured by the same rule** applied to a known path: created dev-owned 0700 if
-   missing, repaired if root-owned and empty, otherwise left alone. `~/.ssh` is Berth
+   missing (logged `created <path>`), repaired if root-owned and empty, otherwise left alone.
+   `~/.ssh` is Berth
    infrastructure (sshd's `authorized_keys` bind mount lives under it), not a Locker.
 
 4. **Order.** The repair block runs after `/run/sshd` and the host-key directory are created and
