@@ -1,4 +1,6 @@
 # Tracked empty stub. docker-compose.yml bind-mounts this as /home/dev/.ssh/authorized_keys
 # when BILLET_AUTHORIZED_KEYS is unset, so a build on a machine without the VM's
-# authorized_keys never hard-fails. sshd trusts no keys in that case — set
-# BILLET_AUTHORIZED_KEYS in the gitignored .devcontainer/.env on the VM (see .env.example).
+# authorized_keys never hard-fails. sshd trusts no keys in that case. Under billet the
+# variable is never unset: `billet start` exports it (the Host admin user's
+# ~/.ssh/authorized_keys) before every compose call, so this stub only ever applies to a
+# build away from the VM.

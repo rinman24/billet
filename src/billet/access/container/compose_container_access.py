@@ -144,11 +144,13 @@ class ComposeContainerAccess:
         user's ``~/.claude/settings.json`` ``env`` block (ADR-0006). ``None``/empty skips it —
         no exec, no settings write. The token travels only as the exec'd python3's STDIN
         (embedded in a quoted heredoc), never as any argv on the Mac, the Host, or the
-        container.
+        container. The same exec first re-owns a root-owned, empty ``~/.claude`` to the
+        login user (ADR-0013 §6): ``up -d`` does not wait for the Berth entrypoint, so on a
+        cold start the injection can reach the Locker before the entrypoint's own repair.
         """
         self._run_script(
             remote,
-            self._compose_up_script(spec, facts, claude_oauth_token),
+            self._compose_up_script(spec, remote, facts, claude_oauth_token),
             on_line=self._on_compose_line,
         )
 
@@ -158,7 +160,7 @@ class ComposeContainerAccess:
         """Run the devcontainer ``postCreateCommand`` in the service container (if any)."""
         if facts.post_create_command is None:
             return
-        script = self._exec_script(spec, facts, facts.post_create_command)
+        script = self._exec_script(spec, remote, facts, facts.post_create_command)
         self._run_script(remote, script)
 
     def run_personal_bootstrap(
@@ -194,7 +196,9 @@ class ComposeContainerAccess:
         lines: list[str] = []
         try:
             self._run_script(
-                remote, self._exec_script(spec, facts, spec.verify_cmd), on_line=lines.append
+                remote,
+                self._exec_script(spec, remote, facts, spec.verify_cmd),
+                on_line=lines.append,
             )
         except ProcessError as exc:
             raise ProcessError(exc.argv, exc.returncode, "\n".join(lines) or exc.stderr) from exc
@@ -204,12 +208,12 @@ class ComposeContainerAccess:
         self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts
     ) -> None:
         """Stop the compose stack (non-destructive — named volumes/data persist)."""
-        self._run_script(remote, _prelude(spec) + _compose_cmd(facts, "stop") + "\n")
+        self._run_script(remote, _prelude(spec, remote) + _compose_cmd(facts, "stop") + "\n")
 
     def is_running(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> bool:
         """Return whether the service container is currently running."""
         ps = _compose_cmd(facts, "ps", "--status", "running", "-q", shlex.quote(facts.service))
-        script = _prelude(spec) + ps + "\n"
+        script = _prelude(spec, remote) + ps + "\n"
         argv = _script_argv(remote)
         result = self._runner.run(argv, input_text=script, check=False)
         _assert_transport_ok(result.returncode, remote)
@@ -222,10 +226,13 @@ class ComposeContainerAccess:
 
     @staticmethod
     def _compose_up_script(
-        spec: WorkspaceSpec, facts: DevcontainerFacts, claude_oauth_token: str | None = None
+        spec: WorkspaceSpec,
+        remote: RemoteHost,
+        facts: DevcontainerFacts,
+        claude_oauth_token: str | None = None,
     ) -> str:
         prelude = (
-            _prelude(spec)
+            _prelude(spec, remote)
             + f"HOST_BOOTSTRAP_CMD={shlex.quote(spec.host_bootstrap_cmd)}\n"
             + 'eval "$HOST_BOOTSTRAP_CMD"\n'
             + f"AGENT_TEAMS_FLAG={shlex.quote(spec.agent_teams_flag)}\n"
@@ -248,11 +255,13 @@ class ComposeContainerAccess:
         return prelude + agent_teams + build + inject
 
     @staticmethod
-    def _exec_script(spec: WorkspaceSpec, facts: DevcontainerFacts, command: str) -> str:
+    def _exec_script(
+        spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts, command: str
+    ) -> str:
         exec_cmd = _compose_cmd(
             facts, "exec", "-T", shlex.quote(facts.service), "bash", "-lc", shlex.quote(command)
         )
-        return _prelude(spec) + exec_cmd + "\n"
+        return _prelude(spec, remote) + exec_cmd + "\n"
 
     @staticmethod
     def _personal_bootstrap_script(
@@ -303,18 +312,31 @@ def _assert_transport_ok(returncode: int, remote: RemoteHost) -> None:
         )
 
 
-def _prelude(spec: WorkspaceSpec) -> str:
-    """Shared remote-script header: fail-fast, cd into the repo, export the assigned port.
+def _prelude(spec: WorkspaceSpec, remote: RemoteHost) -> str:
+    """Shared remote-script header: fail-fast, cd into the repo, export billet's variables.
 
-    ``BILLET_CONTAINER_SSH_PORT`` is exported before every ``docker compose`` invocation so
-    the repo's compose can bind its sshd to billet's assigned loopback port
-    (``127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-2222}:22``). See ADR-0003.
+    Both ``BILLET_*`` variables the Workspace templates interpolate are exported before
+    every ``docker compose`` invocation, so the repo's compose needs no ``.env`` on the Host.
+    ``BILLET_CONTAINER_SSH_PORT`` lets the compose bind its sshd to billet's assigned
+    loopback port (``127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-2222}:22``, ADR-0003).
+    ``BILLET_AUTHORIZED_KEYS`` names the Host admin user's ``authorized_keys`` so the
+    container's sshd trusts the same key that opens the Host
+    (``${BILLET_AUTHORIZED_KEYS:-./authorized_keys-stub}``). The admin user is the one this
+    script already ssh's in as (``RemoteHost.admin_user``) — no new lookup. A shell export
+    outranks compose's ``.env`` interpolation, which is what makes a stale ``.env`` left on
+    a Host inert.
     """
     return (
         "set -euo pipefail\n"
         f"cd {shlex.quote(spec.repo_dir)}\n"
         f"export BILLET_CONTAINER_SSH_PORT={spec.container_ssh_port}\n"
+        f"export BILLET_AUTHORIZED_KEYS={shlex.quote(_authorized_keys_path(remote))}\n"
     )
+
+
+def _authorized_keys_path(remote: RemoteHost) -> str:
+    """Build the Host admin user's ``authorized_keys`` path — the file the container's sshd trusts."""
+    return posixpath.join("/home", remote.admin_user, ".ssh", "authorized_keys")
 
 
 def _compose_cmd(facts: DevcontainerFacts, *args: str) -> str:
@@ -345,14 +367,36 @@ _PYEOF = "BILLET_CLAUDE_TOKEN_PY"
 # ``env`` is never clobbered: the program fails loudly on STDERR (without the token) and
 # exits non-zero so the compose step surfaces the error (#6).
 _CLAUDE_MERGE_BODY = """\
-import json, os, sys, tempfile
+import json, os, pwd, sys, tempfile
 from pathlib import Path
 
 path = Path.home() / ".claude" / "settings.json"
 claude_dir = path.parent
-if not claude_dir.exists():
-    claude_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(claude_dir, 0o700)
+if not claude_dir.is_dir():
+    try:
+        claude_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(claude_dir, 0o700)
+    except OSError:
+        pass  # diagnosed below, naming the owner instead of raising a traceback
+try:
+    user = pwd.getpwuid(os.getuid()).pw_name
+except KeyError:
+    user = f"uid {os.getuid()}"
+if not claude_dir.is_dir():
+    print(
+        f"[billet] refusing to write {path}: {claude_dir} does not exist and could not be "
+        f"created by {user}; re-run billet start after the Berth 1 entrypoint is in place",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if not os.access(claude_dir, os.W_OK):
+    print(
+        f"[billet] refusing to write {path}: {claude_dir} is owned by uid "
+        f"{claude_dir.stat().st_uid}, not writable by {user}; re-run billet start after "
+        "the Berth 1 entrypoint is in place",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 data = {}
 if path.exists():
@@ -411,17 +455,42 @@ def build_claude_merge_program(token: str) -> str:
     return f"token = {token!r}\n" + _CLAUDE_MERGE_BODY
 
 
+# The ADR-0013 repair, applied by the token injection to its own target before the write.
+# ``up -d`` returns as soon as PID 1 starts, and on a cold start the Berth entrypoint is
+# still generating host keys when this exec runs — so a fresh ``*_claude_home`` volume can
+# still be the ``root:root`` directory the daemon created (ADR-0013 cell 1). Same policy as
+# the entrypoint: a directory, owned by uid 0, and empty → re-own it to the login user,
+# 0700; anything else (populated, third-owner, already ours) is left alone. Never
+# recursive. A failed repair warns and continues so the Python program's writability check
+# is what names the fault. ``sudo -n`` never prompts (the Berth grants passwordless sudo).
+# ``$HOME`` falls back to passwd when the exec environment lacks it — the same fallback
+# ``Path.home()`` makes in the program that follows. An unreadable directory fails the
+# ``ls -A`` and so counts as not-empty: better an honest error than a blind re-own.
+CLAUDE_DIR_REPAIR = (
+    'd="${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}/.claude"; '
+    'if [ -d "$d" ] && [ "$(stat -c %u "$d")" = 0 ] && entries="$(ls -A "$d")" '
+    '&& [ -z "$entries" ]; then '
+    'if sudo -n install -d -o "$(id -u)" -g "$(id -g)" -m 0700 "$d"; then '
+    'echo "[billet] repaired $d (was root-owned, empty)"; '
+    'else echo "[billet] warning: repair of $d failed; continuing" >&2; fi; '
+    "fi"
+)
+
+
 def _claude_token_injection(facts: DevcontainerFacts, token: str) -> str:
     """Build the in-container merge step for ``CLAUDE_CODE_OAUTH_TOKEN`` (ADR-0006).
 
-    Runs ``docker compose exec -T -u <remote_user> <service> python3 -`` with the merge
-    program fed on STDIN via a quoted heredoc. ``-u <remote_user>`` guarantees the file is
-    written and owned by the container login user (the same user ``claude`` runs as over the
-    loopback sshd), so a ``0600`` ``~/.claude/settings.json`` on the persisted
-    ``*_claude_home`` volume stays readable, and ``Path.home()`` inside the program resolves
-    to that user's home via its uid. The token is embedded as a Python ``repr()`` literal
-    inside the heredoc body — so it reaches python3 only as STDIN and appears in **no** argv
-    (world-readable via ``ps``/``/proc``) at any hop.
+    Runs ``docker compose exec -T -u <remote_user> <service> bash -c '<repair>; exec
+    python3 -'`` with the merge program fed on STDIN via a quoted heredoc. The ``bash -c``
+    string first applies :data:`CLAUDE_DIR_REPAIR` to ``~/.claude`` (ADR-0013 §6), then
+    ``exec``'s ``python3`` with the heredoc still attached as STDIN — one exec session, the
+    repair on argv (it carries no secret), the token never. ``-u <remote_user>`` guarantees
+    the file is written and owned by the container login user (the same user ``claude``
+    runs as over the loopback sshd), so a ``0600`` ``~/.claude/settings.json`` on the
+    persisted ``*_claude_home`` volume stays readable, and ``Path.home()`` inside the
+    program resolves to that user's home via its uid. The token is embedded as a Python
+    ``repr()`` literal inside the heredoc body — so it reaches python3 only as STDIN and
+    appears in **no** argv (world-readable via ``ps``/``/proc``) at any hop.
     """
     program = build_claude_merge_program(token)
     exec_cmd = _compose_cmd(
@@ -431,7 +500,8 @@ def _claude_token_injection(facts: DevcontainerFacts, token: str) -> str:
         "-u",
         shlex.quote(facts.remote_user),
         shlex.quote(facts.service),
-        "python3",
-        "-",
+        "bash",
+        "-c",
+        shlex.quote(f"{CLAUDE_DIR_REPAIR}; exec python3 -"),
     )
     return f"{exec_cmd} <<'{_PYEOF}'\n{program}{_PYEOF}\n"

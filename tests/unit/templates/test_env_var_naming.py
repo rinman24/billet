@@ -1,24 +1,29 @@
 """Tests for the ``BILLET_`` naming contract the Workspace templates carry.
 
 Every environment variable billet owns is namespaced ``BILLET_*`` — ``BILLET_AUTHORIZED_KEYS``,
-``BILLET_CONTAINER_SSH_PORT``. The name a variable is given is a published interface: it is
-typed into a gitignored ``.devcontainer/.env`` on a VM, and nothing re-reads that file at
-review time. So a variable that drifts to another prefix (issue #60's ``DEVBOX_*``) fails
-the way compose interpolation always fails — silently. The mount falls back to its default,
-the container's sshd trusts the empty ``authorized_keys`` stub, and the operator discovers
-it as a refused ``billet connect`` on the VM, long after the PR that caused it.
+``BILLET_CONTAINER_SSH_PORT``. The name a variable is given is a published interface: the
+compose file a repo merged months ago interpolates it, and billet's remote-script prelude
+exports it; nothing re-reads either at review time. So a variable that drifts to another
+prefix (issue #60's ``DEVBOX_*``) fails the way compose interpolation always fails —
+silently. The mount falls back to its default, the container's sshd trusts the empty
+``authorized_keys`` stub, and the operator discovers it as a refused ``billet connect`` on
+the VM, long after the PR that caused it.
 
 These tests pin the naming rule as a general scan rather than a spot check on one variable:
-every ``${NAME}`` a compose file interpolates and every ``NAME=`` an ``.env`` example assigns
-must carry the prefix, so the *next* mis-prefixed variable is caught by the same assertion.
-``_DEPRECATED_ALIASES`` is the escape hatch for a rename in flight; it is empty, and a name
-added to it is a promise to delete it again.
+every ``${NAME}`` a compose file interpolates and every ``NAME=`` a compose
+``environment:`` list assigns must carry the prefix, so the *next* mis-prefixed variable is
+caught by the same assertion. ``_DEPRECATED_ALIASES`` is the escape hatch for a rename in
+flight; it is empty, and a name added to it is a promise to delete it again. A variable a
+tool owns (``CLAUDE_CONFIG_DIR`` is Claude Code's) is set in mapping form and is not
+billet's to name; the Locker tests cover it.
 
-They also pin how the mount resolves — the named variable first, the tracked stub as the
-default — which is what keeps a build away from the VM from hard-failing. And billet runs
-itself as a Workspace, making it consumer #1 of these templates: the mount is checked in both
-``templates/workspace/`` and billet's own ``.devcontainer/``, because a template change that
-is not mirrored there has never actually been dogfooded.
+They also pin the two ends of the contract against each other: every variable the template
+interpolates is one billet's prelude actually exports, and the mount resolves from the named
+variable first with the tracked stub as the default — which is what keeps a build away from
+the VM from hard-failing. And billet runs itself as a Workspace, making it consumer #1 of
+these templates: the mount is checked in both ``templates/workspace/`` and billet's own
+``.devcontainer/``, because a template change that is not mirrored there has never actually
+been dogfooded.
 """
 
 from dataclasses import dataclass
@@ -27,12 +32,19 @@ import re
 
 import pytest
 
+from billet.access.container.compose_container_access import ComposeContainerAccess
+from tests.unit._fakes import (
+    FakeProcessRunner,
+    completed,
+    make_devcontainer_facts,
+    make_remote_host,
+    make_workspace_spec,
+)
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _TEMPLATE_COMPOSE = _REPO_ROOT / "templates" / "workspace" / "docker-compose.snippet.yml"
-_TEMPLATE_ENV_EXAMPLE = _REPO_ROOT / "templates" / "workspace" / "env.example"
 _DEVCONTAINER_COMPOSE = _REPO_ROOT / ".devcontainer" / "docker-compose.yml"
-_DEVCONTAINER_ENV_EXAMPLE = _REPO_ROOT / ".devcontainer" / ".env.example"
 
 #: The namespace every billet-owned environment variable lives in.
 _BILLET_PREFIX = "BILLET_"
@@ -58,7 +70,8 @@ _AUTHORIZED_KEYS_TARGET = "/home/dev/.ssh/authorized_keys"
 #: being read as variables — they are substituted by the adopting repo, not by compose.
 _INTERPOLATION = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)")
 
-#: A ``NAME=value`` assignment, as an ``.env`` line or a compose ``environment:`` list entry.
+#: A ``NAME=value`` assignment, as a compose ``environment:`` list entry or a shell
+#: ``export NAME=`` line in the prelude billet runs on the Host.
 _ASSIGNMENT = re.compile(r"^(?:-\s+)?(?:export\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=")
 
 #: One ``${NAME:-default}`` layer, unwrapped one at a time by :func:`_interpolation_chain`.
@@ -88,7 +101,7 @@ def _uncommented_lines(path: Path) -> list[str]:
     Parameters
     ----------
     path
-        The compose file or ``.env`` example to read.
+        The compose file to read.
 
     Returns
     -------
@@ -108,13 +121,13 @@ def _referenced_variables(path: Path) -> set[str]:
     """Every environment variable name a template file interpolates or assigns.
 
     One pass covers both shapes billet-owned names appear in: compose ``${NAME}``
-    interpolations (nested ones included) and ``NAME=`` assignments, whether they sit in an
-    ``.env`` example or in a compose ``environment:`` list.
+    interpolations (nested ones included) and ``NAME=`` assignments in a compose
+    ``environment:`` list.
 
     Parameters
     ----------
     path
-        The compose file or ``.env`` example to scan.
+        The compose file to scan.
 
     Returns
     -------
@@ -211,15 +224,35 @@ def _interpolation_chain(expression: str) -> _Interpolation:
         remainder = layer.group("default")
 
 
+def _prelude_exports() -> set[str]:
+    """Every ``export NAME=`` the remote-script prelude emits ahead of a compose call.
+
+    Captured by driving a real :class:`ComposeContainerAccess` against a fake runner and
+    scanning the script it fed to ``bash -se`` — the same scan the templates get, so the two
+    ends of the contract are read by one rule.
+
+    Returns
+    -------
+    set[str]
+        The variable names exported.
+    """
+    runner: FakeProcessRunner = FakeProcessRunner(lambda _argv: completed())
+    access: ComposeContainerAccess = ComposeContainerAccess(runner)
+    access.compose_up(make_workspace_spec(), make_remote_host(), make_devcontainer_facts())
+    script: str | None = runner.inputs[-1]
+    assert script is not None
+    names: set[str] = set()
+    for line in script.splitlines():
+        exported: re.Match[str] | None = _ASSIGNMENT.match(line.strip())
+        if exported is not None and line.strip().startswith("export "):
+            names.add(exported.group("name"))
+    return names
+
+
 @pytest.mark.parametrize(
     "path",
-    [
-        _TEMPLATE_COMPOSE,
-        _TEMPLATE_ENV_EXAMPLE,
-        _DEVCONTAINER_COMPOSE,
-        _DEVCONTAINER_ENV_EXAMPLE,
-    ],
-    ids=["template-compose", "template-env", "devcontainer-compose", "devcontainer-env"],
+    [_TEMPLATE_COMPOSE, _DEVCONTAINER_COMPOSE],
+    ids=["template-compose", "devcontainer-compose"],
 )
 def test_every_billet_owned_variable_uses_the_billet_prefix(path: Path) -> None:
     # The regression (issue #60): DEVBOX_AUTHORIZED_KEYS beside BILLET_CONTAINER_SSH_PORT.
@@ -238,10 +271,35 @@ def test_every_billet_owned_variable_uses_the_billet_prefix(path: Path) -> None:
     }
     assert not offenders, (
         f"{path.relative_to(_REPO_ROOT)} references {sorted(offenders)}, which do not start "
-        f"with `{_BILLET_PREFIX}`. Every variable billet owns is namespaced — an operator "
-        "types these into a gitignored .devcontainer/.env by hand and nothing re-reads that "
-        "file at review time. Rename it, or, if it is a pre-rename alias kept as a compose "
-        "fallback, add it to _DEPRECATED_ALIASES with the release that deletes it."
+        f"with `{_BILLET_PREFIX}`. Every variable billet owns is namespaced — a consumer's "
+        "compose file interpolates these and billet's prelude exports them, and nothing "
+        "re-reads either at review time. Rename it, or, if it is a pre-rename alias kept as "
+        "a compose fallback, add it to _DEPRECATED_ALIASES with the release that deletes it."
+    )
+
+
+@pytest.mark.parametrize(
+    "compose",
+    [_TEMPLATE_COMPOSE, _DEVCONTAINER_COMPOSE],
+    ids=["template", "devcontainer"],
+)
+def test_billet_exports_every_variable_the_compose_interpolates(compose: Path) -> None:
+    # The other end of the contract. Before 0.4.0 BILLET_AUTHORIZED_KEYS came from an .env
+    # an operator copied by hand, and the templates could name a variable nothing set. Now
+    # every `${BILLET_*}` a compose file interpolates must be an `export` in the prelude
+    # billet runs before compose — or the mount falls back to the stub and sshd trusts no
+    # keys, silently, on the VM.
+    interpolated: set[str] = {
+        name for name in _referenced_variables(compose) if name.startswith(_BILLET_PREFIX)
+    }
+    assert interpolated, f"{compose.relative_to(_REPO_ROOT)} interpolates no BILLET_* variable"
+    exported: set[str] = _prelude_exports()
+    assert exported, "the compose prelude exported nothing — the scan no longer matches it"
+    unset: set[str] = interpolated - exported
+    assert not unset, (
+        f"{compose.relative_to(_REPO_ROOT)} interpolates {sorted(unset)}, which billet's "
+        "remote-script prelude never exports (compose_container_access._prelude). Compose "
+        "would silently take the default. Export it there, or drop it from the template."
     )
 
 
@@ -269,24 +327,18 @@ def test_the_authorized_keys_mount_resolves_from_the_billet_variable_alone(compo
     )
 
 
-@pytest.mark.parametrize(
-    "env_example",
-    [_TEMPLATE_ENV_EXAMPLE, _DEVCONTAINER_ENV_EXAMPLE],
-    ids=["template", "devcontainer"],
-)
-def test_the_env_example_assigns_only_the_new_variable_name(env_example: Path) -> None:
-    # The .env.example is the file an operator copies (billet's host_bootstrap_cmd copies it
-    # verbatim). Since 0.2.0 the compose has no fallback, so an example teaching the old name
-    # would mint fresh .env files whose value is never read at all.
-    assigned: set[str] = _referenced_variables(env_example)
-    assert _AUTHORIZED_KEYS_VAR in assigned, (
-        f"{env_example.relative_to(_REPO_ROOT)} must set `{_AUTHORIZED_KEYS_VAR}=` so the "
-        "copy an operator makes on the VM points sshd at the VM's authorized_keys."
+def test_the_prelude_exports_the_new_variable_name_only() -> None:
+    # The prelude replaced the .env.example an operator used to copy (0.4.0). Since 0.2.0 the
+    # compose has no fallback, so a prelude exporting the old name would set a value nothing
+    # reads and the stub would win silently.
+    exported: set[str] = _prelude_exports()
+    assert _AUTHORIZED_KEYS_VAR in exported, (
+        f"billet's compose prelude must `export {_AUTHORIZED_KEYS_VAR}=` so the container's "
+        "sshd trusts the Host admin user's authorized_keys with no file to copy."
     )
-    assert _DEPRECATED_AUTHORIZED_KEYS_VAR not in assigned, (
-        f"{env_example.relative_to(_REPO_ROOT)} still assigns "
-        f"`{_DEPRECATED_AUTHORIZED_KEYS_VAR}`, which no compose file reads any more — the "
-        f"fallback was removed in 0.2.0. The example must teach `{_AUTHORIZED_KEYS_VAR}`."
+    assert _DEPRECATED_AUTHORIZED_KEYS_VAR not in exported, (
+        f"billet's compose prelude still exports `{_DEPRECATED_AUTHORIZED_KEYS_VAR}`, which "
+        f"no compose file reads any more — the fallback was removed in 0.2.0."
     )
 
 

@@ -12,6 +12,7 @@ import sys
 import pytest
 
 from billet.access.container.compose_container_access import (
+    CLAUDE_DIR_REPAIR,
     ComposeContainerAccess,
     build_claude_merge_program,
 )
@@ -151,14 +152,110 @@ def test_compose_up_injects_token_via_python3_exec_over_stdin() -> None:
     assert script is not None
     # The merge runs as the container login user, targeting settings.json via python3.
     assert (
-        "docker compose -f .devcontainer/docker-compose.yml exec -T -u dev gswa-backend python3 -"
+        "docker compose -f .devcontainer/docker-compose.yml exec -T -u dev gswa-backend bash -c"
         in script
     )
+    assert "exec python3 -" in script
     assert 'env["CLAUDE_CODE_OAUTH_TOKEN"] = token' in script
     assert ".claude" in script and "settings.json" in script
     # The token travels in the heredoc (STDIN) as a python literal, after the build step.
     assert "tok-secret-123" in script
     assert script.index("up -d --build") < script.index("python3 -")
+
+
+def test_compose_up_repairs_the_claude_dir_in_the_same_exec_before_python3() -> None:
+    # ADR-0013 §6: `up -d` returns before the Berth entrypoint has run its own repair, so
+    # the injection re-owns a root-owned, empty ~/.claude itself — in the SAME exec session
+    # as the write, ahead of `python3 -`, with the heredoc still on stdin.
+    access, runner = _access(lambda _argv: completed())
+    access.compose_up(SPEC, REMOTE, FACTS, claude_oauth_token="tok-secret-123")
+    script = runner.inputs[-1]
+    assert script is not None
+    lines = script.splitlines()
+    opener = lines[_find_heredoc_opener(lines)]
+    assert "install -d -o" in opener and "-m 0700" in opener
+    assert opener.index("install -d") < opener.index("exec python3 -")
+    assert opener.rstrip().endswith("<<'BILLET_CLAUDE_TOKEN_PY'")
+    # Exactly one exec: the repair is not a separate compose call that could race the write.
+    assert sum("docker compose" in line and " exec " in line for line in lines) == 1
+    assert script.index("up -d --build") < script.index("install -d")
+
+
+def _run_repair(home: Path, *, stat_uid: int, sudo_rc: int = 0) -> subprocess.CompletedProcess[str]:
+    """Run ``CLAUDE_DIR_REPAIR`` under bash with ``stat`` and ``sudo`` faked on PATH.
+
+    ``stat`` reports ``stat_uid`` as every path's owner so the uid-0 branch is reachable
+    without root; ``sudo`` logs its argv to ``<home>/sudo.log`` and exits ``sudo_rc``
+    instead of escalating. Everything else (``ls``, ``id``, ``getent``) is the real thing.
+    """
+    bin_dir = home / "fakebin"
+    bin_dir.mkdir()
+    (bin_dir / "stat").write_text(f"#!/bin/sh\necho {stat_uid}\n")
+    # printf, not echo: dash (Ubuntu's /bin/sh) reads the leading `-n` of `sudo -n …` as
+    # echo's own flag and drops it, which is exactly the argument the assertion is about.
+    (bin_dir / "sudo").write_text(
+        f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/sudo.log"\nexit {sudo_rc}\n'
+    )
+    for tool in ("stat", "sudo"):
+        (bin_dir / tool).chmod(0o755)
+    return subprocess.run(
+        ["bash", "-c", CLAUDE_DIR_REPAIR],
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, "HOME": str(home), "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
+    )
+
+
+def test_claude_dir_repair_reowns_a_root_owned_empty_dir(tmp_path: Path) -> None:
+    # Cell 1 of ADR-0013: the daemon created the mountpoint root:root and nothing has
+    # written to it yet — the one state the policy repairs.
+    (tmp_path / ".claude").mkdir()
+    result = _run_repair(tmp_path, stat_uid=0)
+    assert result.returncode == 0, result.stderr
+    uid, gid = os.getuid(), os.getgid()
+    assert (tmp_path / "sudo.log").read_text() == (
+        f"-n install -d -o {uid} -g {gid} -m 0700 {tmp_path}/.claude\n"
+    )
+    assert "[billet] repaired" in result.stdout
+
+
+def test_claude_dir_repair_leaves_a_populated_root_owned_dir_alone(tmp_path: Path) -> None:
+    # Populated root-owned is warn-only territory (never `chown -R`, never a re-own of a
+    # directory someone has written into) — here the exec simply does not touch it and the
+    # Python program's writability check produces the diagnostic.
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{}")
+    result = _run_repair(tmp_path, stat_uid=0)
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "sudo.log").exists()
+    assert result.stdout == ""
+
+
+def test_claude_dir_repair_leaves_a_dev_owned_dir_alone(tmp_path: Path) -> None:
+    # Already the login user's: leave it, mode included — the common warm-start case.
+    (tmp_path / ".claude").mkdir()
+    result = _run_repair(tmp_path, stat_uid=1000)
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "sudo.log").exists()
+
+
+def test_claude_dir_repair_skips_when_the_dir_is_absent(tmp_path: Path) -> None:
+    # No directory means no volume mounted there (or the Python program will mkdir it);
+    # nothing to re-own.
+    result = _run_repair(tmp_path, stat_uid=0)
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "sudo.log").exists()
+
+
+def test_claude_dir_repair_failure_warns_and_does_not_fail_the_exec(tmp_path: Path) -> None:
+    # PR #62 posture: a failed repair must not abort `start` on its own — the exec goes on
+    # to `python3 -`, whose writability check names the real fault.
+    (tmp_path / ".claude").mkdir()
+    result = _run_repair(tmp_path, stat_uid=0, sudo_rc=1)
+    assert result.returncode == 0
+    assert "[billet] warning: repair of" in result.stderr
+    assert "continuing" in result.stderr
 
 
 def _find_heredoc_opener(lines: list[str]) -> int:
@@ -253,6 +350,26 @@ def test_merge_program_creates_file_when_absent(tmp_path: Path) -> None:
     assert ((tmp_path / ".claude").stat().st_mode & 0o777) == 0o700
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes anywhere; the guard is invisible")
+def test_merge_program_refuses_when_the_claude_dir_is_not_writable(tmp_path: Path) -> None:
+    # F4: before ADR-0013 a root-owned ~/.claude slipped past the `not exists()` guard and
+    # `tempfile.mkstemp` raised PermissionError outside the try — a traceback at COMPOSE_UP.
+    # Now the program checks writability first and names the owner and the remedy.
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(mode=0o500)
+    try:
+        result = _run_merge("tok-secret", tmp_path)
+    finally:
+        claude_dir.chmod(0o700)
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert "tok-secret" not in result.stderr
+    assert result.stderr.startswith(f"[billet] refusing to write {claude_dir / 'settings.json'}")
+    assert f"{claude_dir} is owned by uid {os.getuid()}, not writable by" in result.stderr
+    assert "re-run billet start after the Berth 1 entrypoint is in place" in result.stderr
+    assert not (claude_dir / "settings.json").exists()
+
+
 def test_merge_program_refuses_to_clobber_invalid_json(tmp_path: Path) -> None:
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
@@ -319,6 +436,50 @@ def test_every_compose_op_exports_the_port() -> None:
     for script in runner.inputs:
         assert script is not None
         assert "export BILLET_CONTAINER_SSH_PORT=2299" in script
+
+
+def test_compose_up_exports_the_host_admin_users_authorized_keys_before_up() -> None:
+    # The compose snippet mounts ${BILLET_AUTHORIZED_KEYS:-./authorized_keys-stub} onto the
+    # container's authorized_keys. billet exports the path itself, from the admin user it is
+    # already ssh'd in as, so no .env on the Host is needed for sshd to trust the operator's
+    # key. Exported before `up`, where compose interpolates it.
+    access, runner = _access(lambda _argv: completed())
+    access.compose_up(SPEC, make_remote_host(admin_user="opsadmin"), FACTS)
+    script = runner.inputs[-1]
+    assert script is not None
+    export = "export BILLET_AUTHORIZED_KEYS=/home/opsadmin/.ssh/authorized_keys"
+    assert export in script
+    assert script.index(export) < script.index("up -d --build")
+    # Beside its sibling, ahead of the host hook — the hook may itself call compose.
+    assert script.index("export BILLET_CONTAINER_SSH_PORT") < script.index(export)
+    assert script.index(export) < script.index('eval "$HOST_BOOTSTRAP_CMD"')
+
+
+def test_every_compose_op_exports_the_authorized_keys_path() -> None:
+    # Same reasoning as the port: every compose invocation interpolates the same file, and
+    # a `stop` or `ps` that saw the variable unset would warn about the missing default.
+    remote = make_remote_host(admin_user="opsadmin")
+    access, runner = _access(lambda _argv: completed(stdout="abc\n"))
+    access.compose_up(SPEC, remote, FACTS)
+    access.run_post_create(SPEC, remote, FACTS)
+    access.verify(SPEC, remote, FACTS)
+    access.compose_stop(SPEC, remote, FACTS)
+    access.is_running(SPEC, remote, FACTS)
+    for script in runner.inputs:
+        assert script is not None
+        assert "export BILLET_AUTHORIZED_KEYS=/home/opsadmin/.ssh/authorized_keys" in script
+
+
+def test_the_authorized_keys_export_is_shell_quoted() -> None:
+    # The admin user comes from config.toml; an odd name must not break the script.
+    access, runner = _access(lambda _argv: completed())
+    access.compose_up(SPEC, make_remote_host(admin_user="ops admin"), FACTS)
+    script = runner.inputs[-1]
+    assert script is not None
+    assert (
+        f"export BILLET_AUTHORIZED_KEYS={shlex.quote('/home/ops admin/.ssh/authorized_keys')}"
+        in script
+    )
 
 
 def test_run_post_create_execs_in_service_container() -> None:

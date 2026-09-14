@@ -59,6 +59,16 @@ _NAMED_VOLUME_MOUNT = re.compile(
 #: A top-level volume declaration, e.g. ``  billet_gh_config:``.
 _VOLUME_DECLARATION = re.compile(r"^\s+(?P<name>[A-Za-z0-9_<][A-Za-z0-9_.<>-]*):\s*$")
 
+#: A compose ``environment:`` entry in mapping form, ``NAME: value``.
+_ENVIRONMENT_ENTRY = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*):\s+(?P<value>\S.*?)\s*$")
+
+#: The Claude Locker: the one Locker in the base snippet (ADR-0006's target) and the
+#: variable that pins Claude Code to it. The target is fixed by billet's injector, which
+#: writes ``~/.claude/settings.json`` for the ``dev`` user.
+_CLAUDE_LOCKER_SUFFIX = "_claude_home"
+_CLAUDE_LOCKER_TARGET = "/home/dev/.claude"
+_CLAUDE_CONFIG_DIR_VAR = "CLAUDE_CONFIG_DIR"
+
 #: An ``install -d`` that creates a 0700 directory owned by the non-root ``dev`` user.
 _DEV_OWNED_INSTALL = re.compile(
     r"install\s+-d\s+-o\s+dev\s+-g\s+dev\s+-m\s+0700\s+(?P<path>/[^\s;\\]+)"
@@ -189,6 +199,43 @@ def _named_volume_mounts(compose: Path) -> dict[str, str]:
         if match is not None:
             mounts[match.group("source")] = match.group("target")
     return mounts
+
+
+def _environment_mapping(compose: Path) -> dict[str, str]:
+    """Map each ``environment:`` entry a compose file sets in mapping form to its value.
+
+    Only service-level ``environment:`` blocks (which are indented) are read, and only the
+    ``NAME: value`` mapping form — the list form (``- NAME=value``) is the naming scan's
+    business in ``test_env_var_naming``, since a list entry there reads as an assignment.
+
+    Parameters
+    ----------
+    compose
+        The compose file to scan.
+
+    Returns
+    -------
+    dict[str, str]
+        Variable name to the literal value the file sets.
+    """
+    entries: dict[str, str] = {}
+    block_indent: int | None = None
+    for raw in compose.read_text().splitlines():
+        stripped: str = raw.strip()
+        indent: int = len(raw) - len(raw.lstrip())
+        if not stripped or stripped.startswith("#"):
+            continue
+        if block_indent is not None and indent <= block_indent:
+            block_indent = None
+        if stripped == "environment:" and indent > 0:
+            block_indent = indent
+            continue
+        if block_indent is None:
+            continue
+        match = _ENVIRONMENT_ENTRY.match(stripped)
+        if match is not None:
+            entries[match.group("name")] = match.group("value")
+    return entries
 
 
 def _declared_volumes(compose: Path) -> set[str]:
@@ -323,11 +370,11 @@ def _apt_installed_packages(dockerfile: Path) -> set[str]:
 
 
 @pytest.mark.parametrize("recipe", _RECIPES, ids=_RECIPE_IDS)
-def test_a_recipe_pairs_its_volume_with_a_dev_owned_mountpoint(recipe: _Recipe) -> None:
-    # Both halves of the persistence pair, in one recipe: a mount with no declaration
-    # fails at `up`, i.e. only on the VM, and a declaration with no dev-owned mountpoint
-    # hands the CLI a root:root directory it cannot write — the volume then persists an
-    # empty, unwritable directory and the credential is thrown away anyway (issue #58).
+def test_a_recipe_names_its_locker_canonically(recipe: _Recipe) -> None:
+    # The volume part of a recipe is one compose Locker, under the canonical name billet's
+    # docs use (`<service>_gh_config`, `<service>_azure_home`), mounted at the tool's config
+    # directory and declared — a mount with no declaration fails at `up`, i.e. only on the
+    # VM, so the snippet an adopting repo copies must be a whole volume.
     volume: str = recipe.volume(_SERVICE_PLACEHOLDER)
     assert _named_volume_mounts(recipe.compose).get(volume) == recipe.mountpoint, (
         f"{recipe.compose.relative_to(_REPO_ROOT)} must mount the named volume `{volume}` "
@@ -338,13 +385,20 @@ def test_a_recipe_pairs_its_volume_with_a_dev_owned_mountpoint(recipe: _Recipe) 
         "under the top-level `volumes:` mapping, so the snippet an adopting repo copies "
         "is half a volume."
     )
-    for path in (*recipe.parents, recipe.mountpoint):
-        assert _precreates_dev_owned(recipe.dockerfile, path), (
-            f"{recipe.dockerfile.relative_to(_REPO_ROOT)} must "
-            f"`install -d -o dev -g dev -m 0700 {path}` so the named volume lands writable "
-            "by the non-root user. Parents count separately: `install -d` does not apply "
-            "-o/-g/-m to the ones it creates on the way."
-        )
+
+
+@pytest.mark.parametrize("recipe", _RECIPES, ids=_RECIPE_IDS)
+def test_a_recipe_dockerfile_creates_no_mountpoint(recipe: _Recipe) -> None:
+    # ADR-0013: a recipe is two parts, binary and volume. The image-side `install -d` that
+    # used to be its third part is gone — the Berth entrypoint re-owns a root-owned, empty
+    # Locker at container start, so a snippet that still pre-creates one tells the next
+    # reader the repair is not to be trusted.
+    created: dict[str, int] = _dev_owned_precreations(recipe.dockerfile)
+    assert not created, (
+        f"{recipe.dockerfile.relative_to(_REPO_ROOT)} still pre-creates {sorted(created)}; "
+        "a recipe's Dockerfile snippet installs the binary and nothing else — Locker "
+        "ownership is the entrypoint's job at mount time (ADR-0013)."
+    )
 
 
 @pytest.mark.parametrize("recipe", _RECIPES, ids=_RECIPE_IDS)
@@ -415,6 +469,32 @@ def test_the_base_templates_carry_no_cli_specific_auth_tooling(recipe: _Recipe) 
         f"{_TEMPLATE_COMPOSE.relative_to(_REPO_ROOT)} still carries {sorted(offenders)}, "
         f"the `{recipe.name}` recipe's credential volume. The base compose snippet declares "
         "only the volumes every Workspace uses."
+    )
+
+
+@pytest.mark.parametrize(
+    ("compose", "service"),
+    [(_TEMPLATE_COMPOSE, _SERVICE_PLACEHOLDER), (_DEVCONTAINER_COMPOSE, _BILLET_SERVICE)],
+    ids=["template", "devcontainer"],
+)
+def test_the_base_compose_carries_the_claude_locker(compose: Path, service: str) -> None:
+    # The Claude Locker is the one Locker in the base snippet, not a recipe: every billet
+    # Workspace receives a token (ADR-0006), and the token lands in ~/.claude/settings.json.
+    # CLAUDE_CONFIG_DIR pins `claude` to that same directory; its value is fixed because
+    # the injector hardcodes the path, so any other value would split the two.
+    volume: str = f"{service}{_CLAUDE_LOCKER_SUFFIX}"
+    assert _named_volume_mounts(compose).get(volume) == _CLAUDE_LOCKER_TARGET, (
+        f"{compose.relative_to(_REPO_ROOT)} must mount `{volume}` at {_CLAUDE_LOCKER_TARGET} "
+        "— the Claude Locker the ADR-0006 injection writes into."
+    )
+    assert volume in _declared_volumes(compose), (
+        f"{compose.relative_to(_REPO_ROOT)} mounts `{volume}` without declaring it under the "
+        "top-level `volumes:` mapping."
+    )
+    assert _environment_mapping(compose).get(_CLAUDE_CONFIG_DIR_VAR) == _CLAUDE_LOCKER_TARGET, (
+        f"{compose.relative_to(_REPO_ROOT)} must set `{_CLAUDE_CONFIG_DIR_VAR}: "
+        f"{_CLAUDE_LOCKER_TARGET}` under the service's `environment:` (mapping form) so "
+        "`claude` reads the same directory billet's injection writes."
     )
 
 

@@ -136,8 +136,10 @@ container_alias    = "gswa-container"
 # Optional Claude agent-teams flag written into the repo's .claude/settings.local.json
 # on the host at start time. Empty to skip.
 agent_teams_flag   = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
-# Optional host-side bootstrap hook, run in repo_dir before `compose up` (e.g. generate
-# .env). Defaults to a no-op (":"). The in-container bootstrap is the devcontainer's own
+# Optional host-side bootstrap hook, run in repo_dir before `compose up` — a general
+# per-Workspace hook. Defaults to a no-op (":"). Nothing about authorized_keys belongs
+# here: billet exports BILLET_AUTHORIZED_KEYS and BILLET_CONTAINER_SSH_PORT itself before
+# every compose call. The in-container bootstrap is the devcontainer's own
 # `postCreateCommand` (gswa's is `bash .devcontainer/postcreate.sh`, declared there).
 host_bootstrap_cmd = ":"
 # What `billet start --verify` runs inside the container after a cold bootstrap. Its
@@ -182,7 +184,6 @@ status_color       = "#C05CE0"
 # container_ssh_port = 2223                                      # distinct from gswa-backend's 2222
 # host_alias         = "gswa-devbox"                             # same host alias (one VM)
 # container_alias    = "other-container"                         # distinct container alias
-# host_bootstrap_cmd = ":"
 # verify_cmd         = "make test"
 # status_color       = "#5C9CE0"                                 # optional; a distinct hue tells it apart
 # tmux_session is omitted here too, so it defaults to "other-repo" — two Workspaces on one

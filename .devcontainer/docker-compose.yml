@@ -4,27 +4,37 @@ services:
       context: ..
       dockerfile: .devcontainer/Dockerfile
       target: development
+    environment:
+      # Pin Claude Code's config directory to the Claude Locker. Fixed value: billet's
+      # token injection writes ~/.claude/settings.json (ADR-0006), so any other path would
+      # split what the injector writes from what `claude` reads. Reaches `compose exec`
+      # directly and ssh login shells via the entrypoint's /etc/environment snapshot.
+      CLAUDE_CONFIG_DIR: /home/dev/.claude
     volumes:
       # The repo, bind-mounted for live editing. uid 1000 on both sides (VM azureuser ↔
       # container dev) keeps ownership aligned with no chown. The project venv lives at
       # /workspace/.venv inside this mount; postCreateCommand runs `uv sync --frozen`.
       - ..:/workspace:cached
-      # Persist Claude Code auth + auto-memory across image rebuilds.
+      # The Claude Locker (ADR-0006 target): the injected token, Claude Code auth state and
+      # auto-memory survive image rebuilds. No image-side mountpoint is needed — the Berth
+      # entrypoint re-owns a root-owned, empty Locker at start, and billet's injection does
+      # the same before it writes (ADR-0013).
       - billet_claude_home:/home/dev/.claude
       # Persist the `az login` (Entra) refresh token so az paperwork stays keyless.
       - billet_azure_home:/home/dev/.azure
       # Container sshd trusts the operator's forwarded key via a read-only bind-mount of
-      # the VM's existing authorized_keys — single source of trust. Defaults to an empty
-      # tracked stub so a non-VM build never hard-fails. On the VM set
-      # BILLET_AUTHORIZED_KEYS in the gitignored .devcontainer/.env (see .env.example).
+      # the VM's existing authorized_keys — single source of trust. billet exports
+      # BILLET_AUTHORIZED_KEYS (the Host admin user's ~/.ssh/authorized_keys) before every
+      # compose call, so no .env is involved; the empty tracked stub is the default so a
+      # build away from the VM never hard-fails.
       - ${BILLET_AUTHORIZED_KEYS:-./authorized_keys-stub}:/home/dev/.ssh/authorized_keys:ro
       # Persisted container SSH host keys → stable identity across rebuild/recreate
       # (stable HostKeyAlias, no known_hosts churn). Generated on first boot if absent.
       - billet-sshd-keys:/etc/ssh/host_keys
       # Persist the `gh` credential store (hosts.yml) so a `compose up --build` does not
       # force `gh auth login` again. The token is the operator's, not the image's, so it
-      # belongs on a volume rather than baked in; the Dockerfile pre-creates the
-      # mountpoint dev-owned 0700.
+      # belongs on a volume rather than baked in. Ownership of the mountpoint is the Berth
+      # entrypoint's job at start (ADR-0013), not the Dockerfile's.
       - billet_gh_config:/home/dev/.config/gh
     # Bring up the in-container sshd, then run the CMD (`sleep infinity`). `bash <script>`
     # avoids any dependence on the bind-mounted file's exec bit.
