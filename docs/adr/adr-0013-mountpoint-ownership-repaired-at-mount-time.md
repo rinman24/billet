@@ -118,13 +118,18 @@ performs into a container makes its own target writable first.**
    **before** `ssh-keygen`, so the window in which a Locker is root-owned is the smallest the
    entrypoint can make it.
 
-5. **Images stop pre-creating Locker directories.** genshift-devcontainer removes `.claude`,
-   `.config` and `.config/gh` from its Dockerfile and keeps `.ssh` (item 3). billet's own
-   `.devcontainer/Dockerfile` keeps `.ssh` and drops `.claude` and `.azure`, so billet's own
-   Workspace is the first consumer of the repair rather than the last. The base
-   `Dockerfile.snippet` keeps `.ssh` only. The two recipe Dockerfile snippets lose their §B
-   mountpoint lines: **a recipe is a binary and a volume**. The tests that encoded the build-time
-   model (`test_mountpoints_are_created_before_dropping_to_the_non_root_user`,
+5. **Images stop pre-creating Locker directories.** genshift-devcontainer removes `.claude` and
+   `.config/gh` from its Dockerfile and keeps `.ssh` (item 3) and `.config`. billet's own
+   `.devcontainer/Dockerfile` likewise keeps `.ssh` and `.config` and drops `.claude` and
+   `.azure`, so billet's own Workspace is the first consumer of the repair rather than the
+   last. Neither retained `.config` is a Locker mountpoint: it is the *parent of* one
+   (`~/.config/gh`), so the daemon would create it root-owned and the repair in item 1 can
+   never see it — a parent of a mountpoint does not appear in `/proc/self/mountinfo`. Widening
+   the repair to root-owned empty parents under `$HOME` would change the Berth contract and
+   belongs to Berth 2. The base `Dockerfile.snippet` keeps `.ssh` only. The two recipe
+   Dockerfile snippets lose their §B mountpoint lines: **a recipe is a binary and a volume**.
+   The tests that encoded the build-time model
+   (`test_mountpoints_are_created_before_dropping_to_the_non_root_user`,
    `test_a_recipe_pairs_its_volume_with_a_dev_owned_mountpoint`) are retired; the test that the
    base templates carry no CLI-specific tooling stays.
 
