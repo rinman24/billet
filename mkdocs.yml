@@ -41,6 +41,7 @@ extra_css:
 
 nav:
   - Home: index.md
+  - Context map: CONTEXT-MAP.md
   - Guides:
       - Adopting a repo as a Workspace: adopting-a-repo.md
   - Architecture Decisions:
@@ -55,3 +56,7 @@ nav:
       - ADR-0009 Scope of identity publication: adr/adr-0009-scope-of-identity-publication.md
       - ADR-0010 ssh-config partial success: adr/adr-0010-ssh-config-partial-success.md
       - ADR-0011 Optional auth tooling recipes: adr/adr-0011-optional-auth-tooling-recipes.md
+      - ADR-0012 The Berth: adr/adr-0012-the-berth.md
+      - ADR-0013 Mountpoint ownership repaired at mount time: adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md
+      - ADR-0014 Definition versus state: adr/adr-0014-definition-versus-state.md
+      - ADR-0015 billet doctor: adr/adr-0015-billet-doctor.md

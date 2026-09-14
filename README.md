@@ -42,7 +42,7 @@ Both subsystems ship in Python. The **Host** subsystem drives the VM behind the
 billable cold-create. The **Workspace** subsystem clones, builds, bootstraps, and connects a
 repo's devcontainer on a Host (`billet add|ls|start|stop|connect|ssh-config|rm`), reading each
 repo's `.devcontainer/devcontainer.json` as a read-only data contract. The Python tool now
-fully replaces the original cloud-devbox shell scripts, which have been removed. The
+fully replaces the original shell scripts lifted from gswa-backend, which have been removed. The
 architecture is recorded in
 [ADR-0001](https://rinman24.github.io/billet/adr/adr-0001-closed-architecture-decomposition/) and
 [ADR-0002](https://rinman24.github.io/billet/adr/adr-0002-workspace-subsystem/).
@@ -184,7 +184,14 @@ Workspace wrongly placed on one as `INVALID` rather than probing it. See
 - **Host** — a cloud VM that runs containers.
 - **Workspace** — a repository's devcontainer running on a Host.
 - **HostProvider** — the backend seam that implements Host lifecycle (Azure VM today).
-- **devbox** — the informal name for the shared Host.
+- **Berth** — the Workspace runtime contract billet publishes under `templates/workspace/`
+  (sshd on the assigned loopback port, `dev` at uid/gid 1000, the entrypoint's behaviors),
+  versioned independently of billet by `berth.version`.
+- **Locker** — one named compose volume persisting one tool's state under the login user's
+  home (`<service>_claude_home:/home/dev/.claude`), declared only in the consumer's compose file.
+
+The full glossary and the map of the repositories billet collaborates with are in the
+[context map](https://rinman24.github.io/billet/CONTEXT-MAP/).
 
 ## Development
 
