@@ -1,26 +1,29 @@
 """Tests for the persisted-state contract the Workspace templates prescribe.
 
 A Workspace container is rebuilt often (``compose up --build``), so anything the operator
-authenticated by hand has to live on a named volume or it is lost every rebuild. The
-templates encode that as a pair: a Dockerfile snippet pre-creates the mountpoint dev-owned
-(otherwise the daemon creates it ``root:root`` and the non-root ``dev`` user cannot write
-it), and a compose snippet declares and mounts the volume.
+authenticated by hand has to live on a named volume — a **Locker** — or it is lost every
+rebuild. The compose snippet declares and mounts the volume; ownership of the mount target
+is the Berth entrypoint's job at container start (ADR-0013, ``test_berth.py``), so the
+Dockerfile pre-creates no Locker mountpoint. Until Berth 1 that guarantee lived in the
+image (``install -d -o dev`` before ``USER dev``) and was asserted here; those assertions
+retired with it.
 
-Authentication tooling is where that pairing now lives. Issue #66 took ``gh`` out of the
-base templates: not every Workspace calls ``gh`` or ``az``, so each CLI became an opt-in
-recipe under ``templates/workspace/auth-tooling/`` — and a recipe is itself two halves,
-the CLI baked into the image and its credential directory on a volume. Adopting one half
-only is the failure the recipe exists to prevent: it looks like it works until the next
-rebuild, which either reinstalls the binary by hand or asks for ``gh auth login`` again.
+Authentication tooling is where the persistence pairing lives. Issue #66 took ``gh`` out
+of the base templates: not every Workspace calls ``gh`` or ``az``, so each CLI became an
+opt-in recipe under ``templates/workspace/auth-tooling/`` — and a recipe is itself two
+parts, the CLI baked into the image and its credential directory on a volume. Adopting one
+part only is the failure the recipe exists to prevent: it looks like it works until the
+next rebuild, which either reinstalls the binary by hand or asks for ``gh auth login``
+again.
 
-So these tests hold three seams together. Inside a recipe: mount, declaration, dev-owned
-mountpoint, the apt install that makes persisting a credential store worth anything, and
-the GPG pin on the third-party source it comes from. Across the base templates: the
-absence of all of it, which is the point of #66 — a Workspace that needs neither CLI must
-carry neither. And in billet's own ``.devcontainer/``: billet runs itself as a Workspace
-and needs both CLIs (``az`` manages Hosts, ``gh`` drives pull requests), so it implements
-both recipes and is consumer #1 of its own contract. A template change that is not
-mirrored there has not been dogfooded.
+So these tests hold three seams together. Inside a recipe: mount, declaration, the apt
+install that makes persisting a credential store worth anything, and the GPG pin on the
+third-party source it comes from. Across the base templates: the absence of all of it,
+which is the point of #66 — a Workspace that needs neither CLI must carry neither. And in
+billet's own ``.devcontainer/``: billet runs itself as a Workspace and needs both CLIs
+(``az`` manages Hosts, ``gh`` drives pull requests), so it implements both recipes and is
+consumer #1 of its own contract. A template change that is not mirrored there has not been
+dogfooded.
 """
 
 from dataclasses import dataclass
@@ -99,17 +102,12 @@ class _Recipe:
         What the recipe appends to the compose service name to form the volume name.
     mountpoint
         The container path the credential volume lands on.
-    parents
-        Ancestors of ``mountpoint`` the Dockerfile snippet must create explicitly, because
-        ``install -d`` gives the parents it creates default ownership and mode instead of
-        the flags'.
     """
 
     name: str
     package: str
     volume_suffix: str
     mountpoint: str
-    parents: tuple[str, ...]
 
     @property
     def dockerfile(self) -> Path:
@@ -139,22 +137,20 @@ class _Recipe:
 
 
 #: The recipes issue #66 split out of the base templates. ``gh`` keeps ``hosts.yml`` under
-#: ~/.config/gh — the credential store issue #58 was about — so its parent needs creating
-#: too; ``az`` writes its Entra refresh token straight into ~/.azure, which has none.
+#: ~/.config/gh — the credential store issue #58 was about; ``az`` writes its Entra refresh
+#: token straight into ~/.azure.
 _RECIPES = [
     _Recipe(
         name="gh",
         package="gh",
         volume_suffix="_gh_config",
         mountpoint="/home/dev/.config/gh",
-        parents=("/home/dev/.config",),
     ),
     _Recipe(
         name="az",
         package="azure-cli",
         volume_suffix="_azure_home",
         mountpoint="/home/dev/.azure",
-        parents=(),
     ),
 ]
 _RECIPE_IDS = [recipe.name for recipe in _RECIPES]
@@ -374,7 +370,9 @@ def test_a_recipe_names_its_locker_canonically(recipe: _Recipe) -> None:
     # The volume part of a recipe is one compose Locker, under the canonical name billet's
     # docs use (`<service>_gh_config`, `<service>_azure_home`), mounted at the tool's config
     # directory and declared — a mount with no declaration fails at `up`, i.e. only on the
-    # VM, so the snippet an adopting repo copies must be a whole volume.
+    # VM, so the snippet an adopting repo copies must be a whole volume. Ownership of the
+    # target is no longer the recipe's business: the Berth entrypoint repairs it at mount
+    # time (ADR-0013), which is what retired the third part of the old three-part recipe.
     volume: str = recipe.volume(_SERVICE_PLACEHOLDER)
     assert _named_volume_mounts(recipe.compose).get(volume) == recipe.mountpoint, (
         f"{recipe.compose.relative_to(_REPO_ROOT)} must mount the named volume `{volume}` "
@@ -522,23 +520,24 @@ def test_every_mounted_named_volume_is_declared(compose: Path) -> None:
     [_TEMPLATE_DOCKERFILE, _DEVCONTAINER_DOCKERFILE],
     ids=["template", "devcontainer"],
 )
-def test_mountpoints_are_created_before_dropping_to_the_non_root_user(dockerfile: Path) -> None:
-    # `install -o dev` needs root; after `USER dev` the layer would fail to build. Only
-    # whole Dockerfiles are checked — the recipe snippets are fragments appended to the
-    # base snippet's `dev` RUN layer, with no USER directive of their own to order
-    # against; their placement is the base Dockerfile's `USER dev`, asserted here.
-    text: str = _directive_text(dockerfile)
-    user_line: int = text.find("\nUSER dev")
-    assert user_line != -1, f"{dockerfile.relative_to(_REPO_ROOT)} has no `USER dev` directive"
+def test_ssh_is_the_only_pre_created_locker_shaped_directory(dockerfile: Path) -> None:
+    # Berth 1 (ADR-0013): the image guarantees ~/.ssh — Berth infrastructure, 0700 so the
+    # authorized_keys bind mount is StrictModes-clean — and pre-creates no Locker
+    # mountpoint, because a pre-created one in the reference implementation tells the next
+    # reader it is still required. The entrypoint repairs ownership at mount time instead.
+    # ~/.config is tolerated in billet's own image: it is not a mount target, and chezmoi
+    # writes into it before any Locker is involved.
     creations: dict[str, int] = _dev_owned_precreations(dockerfile)
-    assert creations, (
-        f"{dockerfile.relative_to(_REPO_ROOT)} pre-creates no dev-owned mountpoints at all; "
-        "every named volume it mounts under /home/dev would land root:root."
+    assert "/home/dev/.ssh" in creations, (
+        f"{dockerfile.relative_to(_REPO_ROOT)} must `install -d -o dev -g dev -m 0700 "
+        "/home/dev/.ssh`; sshd's authorized_keys bind mount lands under it."
     )
-    late: list[str] = sorted(path for path, offset in creations.items() if offset > user_line)
-    assert not late, (
-        f"{dockerfile.relative_to(_REPO_ROOT)} creates {late} after `USER dev`; setting "
-        "ownership requires root, so every mountpoint must be created before that directive."
+    lockers: set[str] = {recipe.mountpoint for recipe in _RECIPES} | {"/home/dev/.claude"}
+    pre_created: set[str] = set(creations) & lockers
+    assert not pre_created, (
+        f"{dockerfile.relative_to(_REPO_ROOT)} still pre-creates {sorted(pre_created)}. Since "
+        "Berth 1 the entrypoint repairs a Locker's ownership at mount time; drop the line so "
+        "the reference implementation exercises the repair."
     )
 
 
@@ -558,12 +557,6 @@ def test_billet_devcontainer_implements_the_recipe_it_depends_on(recipe: _Recipe
         f"{_DEVCONTAINER_COMPOSE.relative_to(_REPO_ROOT)} mounts `{volume}` without "
         "declaring it under the top-level `volumes:` mapping."
     )
-    for path in (*recipe.parents, recipe.mountpoint):
-        assert _precreates_dev_owned(_DEVCONTAINER_DOCKERFILE, path), (
-            f"{_DEVCONTAINER_DOCKERFILE.relative_to(_REPO_ROOT)} must "
-            f"`install -d -o dev -g dev -m 0700 {path}` so `{volume}` lands writable by the "
-            "non-root user."
-        )
     assert recipe.package in _apt_installed_packages(_DEVCONTAINER_DOCKERFILE), (
         f"{_DEVCONTAINER_DOCKERFILE.relative_to(_REPO_ROOT)} must apt-install "
         f"`{recipe.package}`: billet persists {recipe.mountpoint} on a volume, so it has "

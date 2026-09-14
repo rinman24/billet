@@ -1,0 +1,58 @@
+# Berth ownership matrix — the Docker behaviour ADR-0013 rests on, exercised for real.
+#
+# Runs tests/integration/test_berth_ownership_matrix.py against the engine preinstalled on
+# ubuntu-latest: fixture images from debian:bookworm-slim, one throwaway compose project per
+# cell, the shipped templates/workspace/dev-entrypoint.sh doing the repair. Path-filtered so
+# a Python change in billet.host does not pay for Docker; scheduled nightly because the
+# behaviour under test (ownership of a named volume the image never pre-created) is
+# undocumented by Docker and could change under us. Never in genshift-devcontainer.
+name: Berth matrix
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'templates/workspace/**'
+      - '.devcontainer/**'
+      - 'tests/integration/**'
+      - '.github/workflows/berth-matrix.yml'
+  schedule:
+    # 05:23 UTC daily — off the hour, so it does not queue behind everyone else's cron.
+    - cron: '23 5 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  berth-matrix:
+    name: Berth ownership matrix (docker compose)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: uv sync (locked deps + project)
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --frozen
+
+      - name: Docker + compose versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker version
+          docker compose version
+
+      - name: Integration tests (BILLET_INTEGRATION=1)
+        shell: bash
+        env:
+          BILLET_INTEGRATION: "1"
+        run: |
+          set -euo pipefail
+          uv run pytest tests/integration -q -rs --no-cov

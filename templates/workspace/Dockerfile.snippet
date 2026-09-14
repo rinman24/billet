@@ -14,12 +14,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # --- 2. Non-root `dev` user (uid/gid 1000) with passwordless sudo ---------------------
-# Required by the entrypoint (it launches the system sshd via sudo) and by billet's
-# connect path (sshd.conf allows only `dev`). uid 1000 aligns with the VM admin user so
-# the repo bind mount needs no chown. Pre-create the dev-owned mountpoint the runtime
-# authorized_keys bind mount lands on, so the daemon does not create it root:root; 0700
-# keeps it StrictModes-clean. A Workspace that also needs `gh` or `az` adds that CLI's
-# credential mountpoint to this same RUN layer, from the matching auth-tooling/ recipe.
+# Required by the entrypoint (it launches the system sshd via sudo and repairs mount
+# ownership via sudo) and by billet's connect path (sshd.conf allows only `dev`). uid 1000
+# aligns with the VM admin user so the repo bind mount needs no chown. ~/.ssh is Berth
+# infrastructure: pre-create it dev-owned 0700 so the runtime authorized_keys bind mount
+# lands StrictModes-clean (the entrypoint also ensures it at start). Lockers — the named
+# volumes that persist a tool's state under /home/dev (`~/.claude`, `~/.config/gh`,
+# `~/.azure`) — need NO pre-created mountpoint here: dev-entrypoint.sh repairs a
+# root-owned, empty mount target to dev-owned 0700 at container start (ADR-0013), so a
+# Locker is one compose `volumes:` line and nothing in this file.
 RUN groupadd -g 1000 dev \
     && useradd -u 1000 -g 1000 -m -s /bin/bash dev \
     && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \

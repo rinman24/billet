@@ -72,10 +72,100 @@ render_container_env() {
     printf '%s\n' "${ENV_BLOCK_END}"
 }
 
+# --- Berth: mount-target ownership repair (ADR-0013) -----------------------------------
+# A named volume mounted at a path the image did not pre-create dev-owned lands
+# root:root, and the tool whose state it persists cannot write it. The image is the wrong
+# place to guarantee ownership — a Workspace on a shared base image does not author its
+# Dockerfile — so the ownership is repaired here, at the one moment both the volume and
+# the login user are present. Policy, per target: a directory owned by uid 0 and EMPTY is
+# re-owned to the login user (0700); everything else is reported and left alone, mode
+# included. Never recursive, never `chown -R`, never fatal: sshd is the operator's way in
+# to fix whatever this could not, so starting it always comes first.
+
+# Print the Docker named-volume mount targets under $HOME, one per line, read from a
+# mountinfo(5) file. Field 4 is the mount root — a named volume's is
+# `<docker-root>/volumes/<name>/_data` — and field 5 the mountpoint; the kernel escapes
+# space, tab, newline and backslash in both as \040, \011, \012 and \134. Bind mounts (the
+# workspace checkout, the authorized_keys file) fail the root test and are skipped.
+berth_mount_targets() {
+    local mountinfo="$1"
+    local mount_id parent_id major_minor root mountpoint rest
+    [ -r "${mountinfo}" ] || return 0
+    while read -r mount_id parent_id major_minor root mountpoint rest; do
+        : "${mount_id}" "${parent_id}" "${major_minor}" "${rest}"
+        root="${root//\\040/ }"
+        root="${root//\\011/$'\t'}"
+        root="${root//\\012/$'\n'}"
+        root="${root//\\134/\\}"
+        mountpoint="${mountpoint//\\040/ }"
+        mountpoint="${mountpoint//\\011/$'\t'}"
+        mountpoint="${mountpoint//\\012/$'\n'}"
+        mountpoint="${mountpoint//\\134/\\}"
+        case "${root}" in
+            */volumes/*/_data) ;;
+            *) continue ;;
+        esac
+        case "${mountpoint}" in
+            "${HOME}"/*) printf '%s\n' "${mountpoint}" ;;
+        esac
+    done < "${mountinfo}"
+}
+
+# Apply the ownership policy to one directory. `berth_ensure_dir <path> create` also makes
+# the directory when it is missing (Berth infrastructure such as ~/.ssh); `<path> skip`
+# ignores a missing or non-directory path (a mount target that is not a directory is not
+# ours to touch).
+berth_ensure_dir() {
+    local path="$1" missing="$2"
+    local uid gid stat_out owner_uid owner_names perms entries
+    uid="$(id -u)"
+    gid="$(id -g)"
+
+    if [ ! -d "${path}" ]; then
+        [ "${missing}" = create ] || return 0
+        [ ! -e "${path}" ] || return 0
+        if sudo -n install -d -o "${uid}" -g "${gid}" -m 0700 "${path}"; then
+            echo "dev-entrypoint: created ${path}"
+        else
+            echo "dev-entrypoint: warning: repair of ${path} failed; continuing" >&2
+        fi
+        return 0
+    fi
+
+    if ! stat_out="$(stat -c '%u %U:%G %a' "${path}" 2>/dev/null)"; then
+        echo "dev-entrypoint: warning: cannot stat ${path}; not repaired" >&2
+        return 0
+    fi
+    read -r owner_uid owner_names perms <<<"${stat_out}"
+    [ "${owner_uid}" != "${uid}" ] || return 0
+    if [ "${owner_uid}" != 0 ]; then
+        echo "dev-entrypoint: warning: ${path} owned by uid ${owner_uid}; not repaired" >&2
+        return 0
+    fi
+    if ! entries="$(find "${path}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)"; then
+        echo "dev-entrypoint: warning: cannot read ${path}; not repaired" >&2
+        return 0
+    fi
+    if [ -n "${entries}" ]; then
+        echo "dev-entrypoint: warning: ${path} is root-owned and not empty; not repaired" >&2
+        return 0
+    fi
+    if sudo -n install -d -o "${uid}" -g "${gid}" -m 0700 "${path}"; then
+        echo "dev-entrypoint: repaired ${path} (was ${owner_names} ${perms})"
+    else
+        echo "dev-entrypoint: warning: repair of ${path} failed; continuing" >&2
+    fi
+}
+
 # billet's test suite sources this file with BILLET_ENTRYPOINT_SOURCE_ONLY=1 to exercise
-# render_container_env() without a container. Nothing sets it at runtime, so a real
-# entrypoint run always continues past here.
+# render_container_env() and the Berth functions without a container. Nothing sets it at
+# runtime, so a real entrypoint run always continues past here.
 [ -z "${BILLET_ENTRYPOINT_SOURCE_ONLY:-}" ] || return 0
+
+# The Berth revision this script was copied with (ADR-0012). Read from the sibling
+# berth.version rather than hardcoded, so a re-copied script cannot misreport it and a
+# copy made without the version file says so.
+echo "dev-entrypoint: berth=$(cat "$(dirname "$0")/berth.version" 2>/dev/null || echo unknown)"
 
 # Privilege-separation directory sshd requires at runtime (not persisted).
 sudo install -d -m 0755 /run/sshd
@@ -83,6 +173,16 @@ sudo install -d -m 0755 /run/sshd
 # Persisted host keys: generated once into the named volume mounted here, then reused
 # forever so the container's SSH identity is stable across rebuild/recreate.
 sudo install -d -m 0755 "${HOST_KEY_DIR}"
+
+# Berth ownership repair: ~/.ssh first (sshd's authorized_keys bind mount lives under it;
+# it is Berth infrastructure, not a Locker), then every named-volume mount target under
+# $HOME. Before ssh-keygen — the slow cold-start step — so the window in which a Locker is
+# root-owned is as small as this script can make it.
+berth_ensure_dir "${HOME}/.ssh" create
+while IFS= read -r target; do
+    berth_ensure_dir "${target}" skip
+done < <(berth_mount_targets /proc/self/mountinfo)
+
 if [ ! -f "${HOST_KEY_DIR}/ssh_host_ed25519_key" ]; then
     echo "dev-entrypoint: generating persisted ed25519 host key"
     sudo ssh-keygen -q -t ed25519 -f "${HOST_KEY_DIR}/ssh_host_ed25519_key" -N ''
