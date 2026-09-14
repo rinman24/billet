@@ -4,12 +4,48 @@ The repo-side files a repository needs to run as a billet **Workspace**. The ful
 walkthrough is [docs/adopting-a-repo.md](../../docs/adopting-a-repo.md) (rendered at
 <https://rinman24.github.io/billet/adopting-a-repo/>).
 
+## The Berth
+
+Together these files implement the **Berth**: the Workspace runtime contract billet
+publishes and every consuming repo carries ([ADR-0012](../../docs/adr/adr-0012-the-berth.md)).
+A Workspace is on the Berth when it exhibits:
+
+- sshd listening on `127.0.0.1:${BILLET_CONTAINER_SSH_PORT}`, key-only, `dev` only
+  (`sshd.conf`, the compose snippet's `ports:`);
+- a `dev` login user at uid/gid 1000 with passwordless sudo (`Dockerfile.snippet`);
+- sshd host keys persisted on a named volume (`dev-entrypoint.sh`, the `<service>-sshd-keys`
+  volume);
+- the container environment republished to login shells via `/etc/environment`
+  (`dev-entrypoint.sh`);
+- named-volume mount targets under `/home/dev` repaired to dev ownership when they come up
+  root-owned and empty, and `~/.ssh` ensured dev-owned 0700
+  (`dev-entrypoint.sh`, [ADR-0013](../../docs/adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md));
+- `authorized_keys` bind-mounted from the Host admin user's file, falling back to the
+  tracked stub (the compose snippet, `authorized_keys-stub`);
+- the startup line `dev-entrypoint: berth=N` (`dev-entrypoint.sh`, `berth.version`).
+
+The Berth has a **version**: one positive integer in `berth.version`, independent of
+billet's own release number. It increments when a Berth file changes in a way that alters a
+directive (a shell statement, an sshd directive, a compose key, a Dockerfile instruction);
+comment-only changes do not bump it. The entrypoint reads the sibling `berth.version` at
+start and logs `dev-entrypoint: berth=N` — or `berth=unknown` when the file is missing. So
+**copy `berth.version` too**, every time you re-copy a Berth file: the number in
+`docker compose logs` is how a Workspace answers "which Berth am I on?", and the revision
+log below tells you what changed above your number.
+
+The Berth is not the container, the image, `devcontainer.json`, or any **Locker** — a named
+compose volume persisting one tool's state under `/home/dev` (`<service>_claude_home`,
+`<service>_gh_config`, `<service>_azure_home`). Lockers are declared only in the consumer's
+compose file; they need no pre-created mountpoint in the image because the Berth entrypoint
+repairs ownership at mount time. `~/.ssh` is Berth infrastructure, not a Locker.
+
 Copy verbatim into the repo's `.devcontainer/`:
 
 | Template | Lands as | Purpose |
 | --- | --- | --- |
 | `sshd.conf` | `.devcontainer/sshd.conf` | Key-only, dev-only sshd hardening drop-in |
-| `dev-entrypoint.sh` | `.devcontainer/dev-entrypoint.sh` | Generates persisted host keys, publishes the container environment to `/etc/environment`, starts sshd, execs the CMD |
+| `dev-entrypoint.sh` | `.devcontainer/dev-entrypoint.sh` | Logs the Berth version, ensures `~/.ssh`, repairs root-owned empty named-volume mount targets under `/home/dev`, generates persisted host keys, publishes the container environment to `/etc/environment`, starts sshd, execs the CMD |
+| `berth.version` | `.devcontainer/berth.version` | The Berth version this copy of the files carries; the entrypoint reads it from beside itself and logs `berth=N` |
 | `authorized_keys-stub` | `.devcontainer/authorized_keys-stub` | Empty fallback so non-VM builds never hard-fail |
 
 Merge into existing files (placeholders: `<service>`, `<workspaceFolder>`, `<port>`,
@@ -59,9 +95,20 @@ pull-request workflow.
 
 ## Revision log
 
-These templates carry no version marker; this log is the record. A consuming repo picks a
-change up only by re-copying the named file — nothing here is applied to an adopted repo
-automatically.
+Rows are keyed by the Berth version that introduced them (`berth.version`). A consuming repo
+picks a change up only by re-copying the named files — nothing here is applied to an adopted
+repo automatically — and every re-copy includes `berth.version`, so the container's
+`dev-entrypoint: berth=N` line states which row it is on.
+
+| Berth | Date | Change | To adopt |
+| --- | --- | --- | --- |
+| 1 | 2026-09-14 | **Berth 1** ([ADR-0012](../../docs/adr/adr-0012-the-berth.md), [ADR-0013](../../docs/adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)). `dev-entrypoint.sh` repairs mount-target ownership at container start: it reads `/proc/self/mountinfo`, and every Docker named volume mounted under `/home/dev` whose target is a directory owned by uid 0 and empty is re-owned to the login user with `sudo -n install -d -o <uid> -g <gid> -m 0700` (logged as `dev-entrypoint: repaired <path> (was root:root <mode>)`). A populated root-owned target, or one owned by a third uid, is reported (`dev-entrypoint: warning: <path> is root-owned and not empty; not repaired` / `owned by uid <n>; not repaired`) and left alone; a target already owned by the login user is untouched, mode included; a failed repair warns (`repair of <path> failed; continuing`) and sshd still starts. Never recursive, never `chown -R`. `~/.ssh` is ensured dev-owned 0700 by the same rule, created if missing. The block runs before `ssh-keygen`, the slow cold-start step. The entrypoint also prints `dev-entrypoint: berth=N` as its first line, read from the new sibling `berth.version`. Consequence: an image no longer needs to pre-create a Locker's mountpoint — `Dockerfile.snippet` keeps only `~/.ssh`, and billet's own `.devcontainer/Dockerfile` drops `~/.claude` and `~/.azure`. | Re-copy `dev-entrypoint.sh` and copy the new `berth.version` beside it into `.devcontainer/`. No compose or config change. Optionally drop the Locker `install -d` lines from the Dockerfile's `dev` RUN layer (keep `~/.ssh`); that takes effect on the next rebuild. **Migration:** a Locker volume that already came up root-owned and empty (the `Permission denied` on first `gh auth login` / `claude`) is fixed by the next `billet start` running this entrypoint — no `docker volume rm`, and nothing is lost because the volume was empty. A populated root-owned volume is only reported; fix it by hand (`sudo chown -R dev:dev <path>` inside the container) after deciding whose files they are. |
+
+### Pre-versioning
+
+The rows below predate `berth.version` and are not retroactively numbered. A Workspace that
+adopted all of them and nothing since is at "pre-versioning", which the entrypoint reports
+as `berth=unknown` until `berth.version` is copied alongside the Berth 1 entrypoint.
 
 | Date | Change | To adopt |
 | --- | --- | --- |

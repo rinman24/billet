@@ -45,10 +45,18 @@ verbatim into `.devcontainer/`:
 
 - `sshd.conf` — key-only / non-root / `dev`-only sshd drop-in, host keys on a named
   volume.
-- `dev-entrypoint.sh` — two jobs. It generates the persisted host keys on first boot,
-  `sshd -t` fail-fasts, starts sshd via sudo, then `exec "$@"`; and, just before sshd
-  starts, it snapshots the container's own environment into `/etc/environment` so image
-  `ENV` and compose `environment:` values are visible in sshd login shells.
+- `dev-entrypoint.sh` — three jobs. It repairs the ownership of named-volume mount
+  targets under `/home/dev` that came up root-owned and empty, and ensures `~/.ssh`
+  (see [Locker ownership at mount time](#locker-ownership-at-mount-time-berth-1) below);
+  it generates the persisted host keys on first boot, `sshd -t` fail-fasts, starts sshd
+  via sudo, then `exec "$@"`; and, just before sshd starts, it snapshots the container's
+  own environment into `/etc/environment` so image `ENV` and compose `environment:`
+  values are visible in sshd login shells.
+- `berth.version` — the Berth version these files carry (one integer; see the
+  [templates README](https://github.com/rinman24/billet/blob/main/templates/workspace/README.md#the-berth)).
+  The entrypoint reads it from beside itself and logs `dev-entrypoint: berth=N` on every
+  start, so copy it every time you re-copy a Berth file; a missing file logs
+  `berth=unknown`.
 - `authorized_keys-stub` — tracked empty fallback, mounted whenever
   `BILLET_AUTHORIZED_KEYS` is unset, so a build away from the VM never hard-fails. Under
   billet it is never unset: `start` exports the Host admin user's
@@ -63,6 +71,39 @@ the mechanism and its limits — the file is world-readable, and a value contain
 backslash, or a control character is skipped with a warning). It is not a secret channel:
 credentials keep travelling through `~/.claude/settings.json`
 ([ADR-0006](adr/adr-0006-claude-token-injection.md)), never compose `environment:`.
+
+### Locker ownership at mount time (Berth 1)
+
+A **Locker** is a named compose volume that persists one tool's state under the login
+user's home — `<service>_claude_home` on `~/.claude`, `<service>_gh_config` on
+`~/.config/gh`, `<service>_azure_home` on `~/.azure`. Docker initialises a fresh volume from
+whatever the image has at the mountpoint; when the image has nothing there, the directory
+comes up `root:root` and the tool cannot write it. From Berth 1 the entrypoint, not the
+image, guarantees ownership
+([ADR-0013](adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)): at every start,
+before generating host keys, it reads `/proc/self/mountinfo` and applies one policy to
+every Docker named volume mounted under `/home/dev`:
+
+| Target state | What happens | Log line |
+| --- | --- | --- |
+| directory, owned by uid 0, empty | `sudo -n install -d -o <uid> -g <gid> -m 0700` | `dev-entrypoint: repaired <path> (was root:root <mode>)` |
+| directory, owned by uid 0, populated | left alone | `dev-entrypoint: warning: <path> is root-owned and not empty; not repaired` |
+| directory, owned by another uid | left alone | `dev-entrypoint: warning: <path> owned by uid <n>; not repaired` |
+| directory, owned by the login user | left alone, mode included | none |
+| the repair itself fails | sshd still starts | `dev-entrypoint: warning: repair of <path> failed; continuing` |
+
+`~/.ssh` gets the same rule applied to a known path (created dev-owned 0700 if missing),
+because sshd's `authorized_keys` bind mount lives under it; it is Berth infrastructure,
+not a Locker. Bind mounts are skipped by source. Nothing is recursive and nothing is
+`chown -R`. The consequence for the repo is that **a Locker is one compose `volumes:` line
+and nothing in the Dockerfile**: the image need not pre-create the mountpoint, and the
+`Dockerfile.snippet` keeps only `~/.ssh`.
+
+Migration for a Workspace already bitten by this — a Locker whose first use failed with
+`Permission denied` — is nothing more than re-copying the Berth 1 entrypoint (with
+`berth.version`) and running the next `billet start`: an already-broken **empty** volume is
+repaired on that start, and no `docker volume rm` is involved. A populated root-owned volume
+is only reported; decide whose files they are before re-owning them by hand.
 
 Then merge the two snippets:
 
@@ -340,7 +381,7 @@ claude --model <name>
 `config.toml` *is* the ledger — keep every Workspace in it, including other operators', or
 the next `container_ssh_port` cannot be chosen safely.
 
-Allocation starts at 2222 and climbs; the shared devbox currently has 2222 and 2224–2228
+Allocation starts at 2222 and climbs; the shared Host currently has 2222 and 2224–2228
 assigned. That range is a snapshot and will age, so read the live answer out of your config
 rather than trusting this line:
 
