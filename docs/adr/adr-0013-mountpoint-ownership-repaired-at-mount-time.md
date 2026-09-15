@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-09-14). Part of Berth 1 ([ADR-0012](adr-0012-the-berth.md)). Amends
+Accepted (2026-09-14). Part of Berth 1 ([ADR-0012](adr-0012-the-berth.md)). Amends
 [ADR-0011](adr-0011-optional-auth-tooling-recipes.md): a recipe has two parts (binary,
 volume), not three, and "both halves required" becomes "the image-side mountpoint is
 unnecessary". Amends [ADR-0006](adr-0006-claude-token-injection.md): the token injection makes
@@ -73,7 +73,7 @@ entrypoint alone would therefore break the one write billet itself performs.
 
 **The Berth entrypoint repairs the ownership of named-volume mount targets under the login
 user's home at container start, for targets that are root-owned and empty, and warns about
-every other anomaly. Images stop pre-creating credential directories. The one write billet
+every other anomaly. Images stop pre-creating Locker directories. The one write billet
 performs into a container makes its own target writable first.**
 
 1. **Discovery.** Before generating host keys, the entrypoint reads `/proc/self/mountinfo` and
@@ -161,10 +161,17 @@ performs into a container makes its own target writable first.**
   runs a Berth 1 entrypoint (cell 6) or by any image that still pre-creates the path (cell 3).
   No operator runs `docker volume rm`. A **populated** root-owned volume is reported, not
   repaired; the operator decides.
-- The shared image's 2.0.0 release, which drops pre-creation, is safe only for consumers already
-  on Berth 1. Sequencing is recorded in the plan: genshift-brand's Berth 1 PR merges before the
-  image release. Existing volumes are unaffected either way (cell 6 shows repaired ownership
-  persists; an initialized dev-owned volume is not re-owned by an image lacking the path).
+- The shared image's 2.0.0 release, which drops Locker pre-creation, is safe only for consumers
+  already on Berth 1. Sequencing is recorded in the plan: genshift-brand's Berth 1 PR merges
+  before the image release. Existing volumes are unaffected either way (cell 6 shows repaired
+  ownership persists; an initialized dev-owned volume is not re-owned by an image lacking the
+  path).
+- On genshift-devcontainer 2.0.0 the Claude Locker is protected in practice by
+  copy-on-empty, not by the repair: the image still ships a populated dev-owned
+  `/home/dev/.claude` — created by the Claude Code install, not by an `install -d` line —
+  so a fresh `*_claude_home` volume is cell 2 and the repair correctly skips it as already
+  dev-owned. `~/.config/gh` has no counterpart in the image and is the one target actually
+  repaired. The repair covers `.claude` unchanged if the image ever stops shipping it.
 - ADR-0011's failure table loses its "credential volume only → unwritable" row; the residual
   broken row is "volume without CLI", which costs an empty directory and is caught by
   `verify_cmd` if it matters.

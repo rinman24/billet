@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-09-14). Names the runtime surface billet has published since
+Accepted (2026-09-14). Names the runtime surface billet has published since
 [ADR-0003](adr-0003-workspace-port-binding-contract.md) and gives it a version. Amends
 [ADR-0002](adr-0002-workspace-subsystem.md) §1 only in vocabulary: the repo still owns its
 `.devcontainer/`, and billet still reads five fields out of one file. The directive-hash
