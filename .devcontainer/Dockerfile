@@ -130,10 +130,17 @@ RUN sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin -t v2.71.0 \
 # accepted dev-convenience trade-off (also lets the entrypoint start the system sshd and
 # repair mount ownership). Only ~/.ssh is pre-created here: it is Berth infrastructure,
 # 0700 so the bind-mounted authorized_keys is StrictModes-clean. The Locker mountpoints
-# (`~/.claude`, `~/.azure`, `~/.config/gh`) are deliberately NOT pre-created any more:
+# (`~/.claude`, `~/.azure`, `~/.config/gh`) get no `install -d` of their own any more:
 # dev-entrypoint.sh repairs a root-owned, empty named-volume mount target to dev-owned
 # 0700 at container start (ADR-0013), and billet's own Workspace is the first consumer of
-# that repair. ~/.config itself is kept dev-owned because it is not a mount target — the
+# that repair. That is the whole story for ~/.azure and ~/.config/gh, which this image
+# never creates: their fresh volumes land root:root 0755 and the entrypoint repairs both.
+# ~/.claude is the exception — the Claude Code installer further down runs as `dev` and
+# leaves a populated /home/dev/.claude (backups/, downloads/, sessions/) at 0755, so
+# Docker's copy-on-empty seeds a fresh volume with the image's content and ownership
+# together and the repair correctly skips it as already dev-owned. Both routes end up
+# writable by dev; the mode is the tell — 0755 came from the image, 0700 from the repair.
+# ~/.config itself is kept dev-owned because it is not a mount target — the
 # daemon would otherwise create it root:root as the parent of the ~/.config/gh mount, and
 # chezmoi writes ~/.config/git/config into it from postCreateCommand.
 RUN groupadd -g 1000 dev \
