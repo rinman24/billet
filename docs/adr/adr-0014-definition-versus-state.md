@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-09-14). Restates the boundary that [ADR-0002](adr-0002-workspace-subsystem.md)
+Accepted (2026-09-14). Restates the boundary that [ADR-0002](adr-0002-workspace-subsystem.md)
 §1, [ADR-0005](adr-0005-instance-lifecycle-ownership.md) and
 [ADR-0011](adr-0011-optional-auth-tooling-recipes.md) each describe from one side, so that the
 writes [ADR-0006](adr-0006-claude-token-injection.md) already performs and the repair
