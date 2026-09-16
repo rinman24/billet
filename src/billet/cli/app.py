@@ -5,11 +5,11 @@ group, and the top-level Workspace commands (add / ls / start / stop / connect /
 ssh-config / rm).
 """
 
-from importlib.metadata import version as _dist_version
 from typing import Annotated
 
 import typer
 
+from billet import __version__
 from billet.cli import _ui, host_commands, workspace_commands
 
 app = typer.Typer(
@@ -42,14 +42,19 @@ def root(
     if ctx.invoked_subcommand is None:
         # Bare `billet` is the signature moment: the berth-rack banner + command surface
         # (`billet version` stays a bare version string — scripts parse it).
-        _ui.banner(_dist_version("billet"))
+        _ui.banner(__version__)
         _ui.command_surface()
 
 
 @app.command()
 def version() -> None:
-    """Print the installed billet version."""
-    typer.echo(_dist_version("billet"))
+    """Print the running billet version."""
+    # Read the source constant, not `importlib.metadata`: the installed distribution's
+    # metadata is a build-time snapshot of this same constant (pyproject's
+    # `[tool.hatch.version]`), and an editable venv keeps serving the stale snapshot until
+    # the project is reinstalled — `uv sync` alone will not refresh it. Reading the
+    # constant cannot drift, and works from a source tree with nothing installed.
+    typer.echo(__version__)
 
 
 def main() -> None:
