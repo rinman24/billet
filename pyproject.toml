@@ -9,7 +9,6 @@ license-files = ["LICENSE"]
 dynamic = ["version"]
 keywords = [
     "devcontainer",
-    "devbox",
     "azure",
     "ssh",
     "cloud-development",

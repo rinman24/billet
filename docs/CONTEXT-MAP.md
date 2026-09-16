@@ -25,7 +25,8 @@ an ADR takes each one.
 
 Retired from prose in billet and in the shared toolchain image's repository: *devbox* (the
 `config.toml` table key `[hosts.devbox]` and the `gswa-devbox` alias string keep working; the
-word is no longer a concept), *Half A/B/C* (a recipe has two parts), *self-consumption drift*
+word is no longer a concept and leaves billet's package metadata too — the `pyproject.toml`
+keyword is dropped), *Half A/B/C* (a recipe has two parts), *self-consumption drift*
 and *canary* (both named nothing that exists).
 
 ## The five contexts
@@ -40,7 +41,7 @@ are named in DDD terms; each row states what fixes the pattern.
 | Product repo | billet | Conformist behind an anti-corruption layer | The repo authors `devcontainer.json` on its own cadence; billet adapts through `_facts_from_json` → `DevcontainerFacts` (JSONC stripped, paths re-rooted, `postCreateCommand` normalized, the object form refused with a named error). billet never edits the repo's compose file ([ADR-0003](adr/adr-0003-workspace-port-binding-contract.md)). |
 | billet | Product repo | Open Host Service publishing a versioned Published Language; the consumer conforms by copy | The Berth: `templates/workspace/` plus [the adoption guide](adopting-a-repo.md). Until Berth 1 the language had no version and this row was a Shared Kernel replicated by hand; `berth.version` and the directive hash are what make it an OHS ([ADR-0012](adr/adr-0012-the-berth.md)). |
 | Shared toolchain image | Product repo (image pinner) | Customer/Supplier over a well-versioned Published Language | The consumer's Dockerfile is one digest-pinned `FROM` line and its CI `container:` must match. Toolchain versions are pinned in `versions.env`, tested by `verify-image.sh`, propagated by Renovate. Image 2.0.0 (planned) extends `verify-image.sh` with Berth conformance: `dev` at uid/gid 1000, `sudo -n`, `sshd`, the baked `sshd.conf`, `~/.ssh` dev-owned 0700. |
-| billet | Shared toolchain image | Conformist, undeclared | The image implements the Berth's build-time half (`dev` at uid 1000 with passwordless sudo, `openssh-server`, billet's sshd drop-in, `~/.ssh`) and says so; billet does not know the image exists. **The image carries no Lockers**: from 2.0.0 it pre-creates no credential directory (today it pre-creates `.claude`, `.config` and `.config/gh`, which the repair makes redundant), because the Berth entrypoint repairs mount-target ownership at start ([ADR-0013](adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)). Lockers exist only in consumer compose files. |
+| billet | Shared toolchain image | Conformist, undeclared | The image implements the Berth's build-time half (`dev` at uid 1000 with passwordless sudo, `openssh-server`, billet's sshd drop-in, `~/.ssh`) and says so; billet does not know the image exists. **The image carries no Lockers**: from 2.0.0 it pre-creates no credential directory with an `install -d` line, because the Berth entrypoint repairs mount-target ownership at start ([ADR-0013](adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)). It does still ship a populated dev-owned `/home/dev/.claude` as a side effect of the Claude Code install, so that Locker is protected by copy-on-empty while `~/.config/gh` is the one target the repair handles. Lockers exist only in consumer compose files. |
 | Shared toolchain image | billet | Separate Ways, deliberately | billet builds its own reference Workspace from `python:3.11-bookworm` and must stay usable by a repository outside GenShift. No billet change may require the shared image. |
 | billet | Dotfiles | Open Host Service + Published Language, deliberately unvalidated | Three `@billet_*` tmux options, closed at three, with a stated test for a fourth ([ADR-0008](adr/adr-0008-workspace-identity-publication.md), [ADR-0009](adr/adr-0009-scope-of-identity-publication.md)). The healthiest relationship in the map. |
 | Dotfiles | Product repo and image | Shared Kernel by convergence, two invocation owners | The image bakes `chezmoi` but never runs it; the pull happens through billet's global `personal_bootstrap_cmd` and each repo's `postCreateCommand`. See the lifecycle-hooks question below. |
@@ -65,9 +66,9 @@ the 2026-09-08 templates (the last pre-versioning revision); each moves to Berth
 
 Existing consumer volume names stay grandfathered; the canonical `<service>_claude_home`,
 `<service>_gh_config` and `<service>_azure_home` names apply to new adopters. The shared image's
-2.0.0 release (drops credential-directory pre-creation) waits for genshift-brand to be on Berth
-1, because a fresh `gh` Locker mounted by a pre-Berth-1 entrypoint into a 2.0.0 image would stay
-root-owned with nothing to repair it.
+2.0.0 release (drops Locker pre-creation) waits for genshift-brand to be on Berth 1, because a
+fresh `gh` Locker mounted by a pre-Berth-1 entrypoint into a 2.0.0 image would stay root-owned
+with nothing to repair it.
 
 ## Open questions
 
