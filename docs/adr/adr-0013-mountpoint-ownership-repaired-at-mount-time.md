@@ -63,11 +63,19 @@ line after `docker compose up -d --build`, with no wait between them
 (`_compose_up_script` in `compose_container_access.py`). `up -d` returns when PID 1 starts; on a cold start the
 entrypoint then spends seconds generating a 4096-bit RSA host key before it reaches anything
 else. Today the write succeeds because the image seeded the volume dev-owned before `up`
-returned (cell 2). Once the image stops pre-creating the directory, the exec lands on a
-root-owned `~/.claude` while the entrypoint is still in `ssh-keygen`; the program's `if not
+returned (cell 2). Dropping the explicit `install -d` line does not by itself end that: in both
+the shared image and billet's own, the Claude Code installer runs as `dev` and leaves a
+populated `/home/dev/.claude` at 0755, so copy-on-empty still seeds a fresh `*_claude_home`
+volume dev-owned and the repair correctly skips it as already dev-owned. The mode is the tell —
+0755 came from the image, 0700 from the repair. What item 6 defends against is therefore
+narrower than "the image stops pre-creating the directory" reads: that seeding is an installer
+side effect rather than a guarantee, and against an image that ships no populated `~/.claude` —
+the state `~/.azure` and `~/.config/gh` are already in — the exec lands on a root-owned
+`~/.claude` while the entrypoint is still in `ssh-keygen`; the program's `if not
 claude_dir.exists()` guard skips its own `mkdir`, `tempfile.mkstemp` raises `PermissionError`
 outside the `try`, and `billet start` aborts with a traceback. Moving the guarantee into the
-entrypoint alone would therefore break the one write billet itself performs.
+entrypoint alone would therefore leave the one write billet itself performs resting on that side
+effect.
 
 ## Decision
 
