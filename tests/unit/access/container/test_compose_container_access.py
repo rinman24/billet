@@ -181,16 +181,28 @@ def test_compose_up_repairs_the_claude_dir_in_the_same_exec_before_python3() -> 
     assert script.index("up -d --build") < script.index("install -d")
 
 
-def _run_repair(home: Path, *, stat_uid: int, sudo_rc: int = 0) -> subprocess.CompletedProcess[str]:
+def _run_repair(
+    home: Path,
+    *,
+    stat_uid: int,
+    sudo_rc: int = 0,
+    stat_names: str = "root:root",
+    stat_mode: str = "755",
+    stat_rc: int = 0,
+) -> subprocess.CompletedProcess[str]:
     """Run ``CLAUDE_DIR_REPAIR`` under bash with ``stat`` and ``sudo`` faked on PATH.
 
-    ``stat`` reports ``stat_uid`` as every path's owner so the uid-0 branch is reachable
-    without root; ``sudo`` logs its argv to ``<home>/sudo.log`` and exits ``sudo_rc``
-    instead of escalating. Everything else (``ls``, ``id``, ``getent``) is the real thing.
+    ``stat`` answers the snippet's one ``-c "%u %U:%G %a"`` call with ``stat_uid``,
+    ``stat_names`` and ``stat_mode`` — so the uid-0 branch is reachable without root and the
+    owner/mode the success line reports is known — and exits ``stat_rc``; ``sudo`` logs its
+    argv to ``<home>/sudo.log`` and exits ``sudo_rc`` instead of escalating. Everything else
+    (``ls``, ``id``, ``getent``) is the real thing.
     """
     bin_dir = home / "fakebin"
     bin_dir.mkdir()
-    (bin_dir / "stat").write_text(f"#!/bin/sh\necho {stat_uid}\n")
+    (bin_dir / "stat").write_text(
+        f"#!/bin/sh\necho '{stat_uid} {stat_names} {stat_mode}'\nexit {stat_rc}\n"
+    )
     # printf, not echo: dash (Ubuntu's /bin/sh) reads the leading `-n` of `sudo -n …` as
     # echo's own flag and drops it, which is exactly the argument the assertion is about.
     (bin_dir / "sudo").write_text(
@@ -217,7 +229,29 @@ def test_claude_dir_repair_reowns_a_root_owned_empty_dir(tmp_path: Path) -> None
     assert (tmp_path / "sudo.log").read_text() == (
         f"-n install -d -o {uid} -g {gid} -m 0700 {tmp_path}/.claude\n"
     )
-    assert "[billet] repaired" in result.stdout
+    # The parenthetical carries the owner and mode actually observed, in the same shape the
+    # Berth entrypoint uses (`dev-entrypoint: repaired <path> (was root:root 755)`) — one
+    # concept, one log shape — under billet's own prefix, which names the emitter.
+    assert result.stdout == f"[billet] repaired {tmp_path}/.claude (was root:root 755)\n"
+
+
+def test_claude_dir_repair_reports_the_owner_and_mode_it_actually_saw(tmp_path: Path) -> None:
+    # The parenthetical is read off the single `stat`, not hardcoded prose: a root-owned
+    # mountpoint the daemon made 0700 must say so, or the line misleads the operator.
+    (tmp_path / ".claude").mkdir()
+    result = _run_repair(tmp_path, stat_uid=0, stat_names="root:staff", stat_mode="700")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"[billet] repaired {tmp_path}/.claude (was root:staff 700)\n"
+
+
+def test_claude_dir_repair_leaves_the_dir_alone_when_stat_fails(tmp_path: Path) -> None:
+    # A `stat` that fails short-circuits the chain: nothing is re-owned, nothing is logged,
+    # and the exec still goes on to `python3 -` whose writability check names the fault.
+    (tmp_path / ".claude").mkdir()
+    result = _run_repair(tmp_path, stat_uid=0, stat_rc=1)
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "sudo.log").exists()
+    assert result.stdout == ""
 
 
 def test_claude_dir_repair_leaves_a_populated_root_owned_dir_alone(tmp_path: Path) -> None:
