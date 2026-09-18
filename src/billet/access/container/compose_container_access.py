@@ -466,12 +466,20 @@ def build_claude_merge_program(token: str) -> str:
 # ``$HOME`` falls back to passwd when the exec environment lacks it — the same fallback
 # ``Path.home()`` makes in the program that follows. An unreadable directory fails the
 # ``ls -A`` and so counts as not-empty: better an honest error than a blind re-own.
+#
+# The single ``stat`` yields all three fields the snippet needs — ``%u`` for the uid-0 test,
+# ``%U:%G %a`` for the log — so the success line reports the ownership and mode actually
+# observed, in the entrypoint's parenthetical shape: ``repaired <path> (was <owner>:<group>
+# <mode>)``. One call, so the tested state and the reported state cannot drift apart. The
+# ``[billet]`` prefix stays: it names the emitter, and this repair is billet's injection,
+# not the entrypoint. A ``stat`` that fails short-circuits the chain, leaving the directory
+# alone exactly as the empty-output comparison did before.
 CLAUDE_DIR_REPAIR = (
     'd="${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}/.claude"; '
-    'if [ -d "$d" ] && [ "$(stat -c %u "$d")" = 0 ] && entries="$(ls -A "$d")" '
-    '&& [ -z "$entries" ]; then '
+    'if [ -d "$d" ] && st="$(stat -c "%u %U:%G %a" "$d")" && [ "${st%% *}" = 0 ] '
+    '&& entries="$(ls -A "$d")" && [ -z "$entries" ]; then '
     'if sudo -n install -d -o "$(id -u)" -g "$(id -g)" -m 0700 "$d"; then '
-    'echo "[billet] repaired $d (was root-owned, empty)"; '
+    'echo "[billet] repaired $d (was ${st#* })"; '
     'else echo "[billet] warning: repair of $d failed; continuing" >&2; fi; '
     "fi"
 )
