@@ -11,6 +11,7 @@ manager never replaces the process itself, which keeps it unit-testable.
 """
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 import shlex
 
 from billet.contracts import (
@@ -37,7 +38,7 @@ from billet.contracts import (
 )
 from billet.infrastructure import ssh
 from billet.shared.errors import BilletError, HostOperationError
-from billet.workspace.engine import berth_policy
+from billet.workspace.engine import berth_policy, runtime_policy
 from billet.workspace.engine.placement import HostPlacementPolicy
 from billet.workspace.engine.port_allocator import PortAllocator
 from billet.workspace.engine.ssh_config_engine import SshConfigEngine
@@ -324,12 +325,14 @@ class WorkspaceManager:
         berth: PackagedBerth,
         filters: DoctorFilters,
     ) -> DoctorReport:
-        """Compare each selected Workspace's copied Berth files with the shipped ``berth``.
+        """Report each selected Workspace's Berth drift against ``berth``, then its runtime.
 
         Workspaces are grouped by Host and each Host is probed exactly once (ADR-0015 item 1,
         D-A4-10). ``filters`` narrow the selection. A Host that cannot be reached over SSH is
         reported as skipped and never started (D-A4-9); any other probe fault skips that Host
-        with its message, so one bad Host never hides the rest. ``doctor`` never mutates.
+        with its message, so one bad Host never hides the rest. Each Workspace's runtime is
+        read from its entrypoint's log and its running Berth compared with the checkout's
+        stamp (D-A4-8). ``doctor`` never mutates.
         """
         groups: dict[str, list[tuple[WorkspaceSpec, RemoteHost]]] = {}
         for spec, remote in items:
@@ -344,7 +347,7 @@ class WorkspaceManager:
             specs = [spec for spec, _ in members]
             keys = tuple(spec.key for spec in specs)
             try:
-                reads = self._doctor.read_berths(members[0][1], specs)
+                probes = self._doctor.probe(members[0][1], specs)
             except HostOperationError:
                 skipped.append(DoctorSkip(host=host, reason="unreachable", workspaces=keys))
                 continue
@@ -352,10 +355,10 @@ class WorkspaceManager:
                 reason = f"probe failed: {_first_line(exc)}"
                 skipped.append(DoctorSkip(host=host, reason=reason, workspaces=keys))
                 continue
-            statuses.extend(
-                berth_policy.assess(read, berth, host=host, repo_dir=spec.repo_dir)
-                for spec, read in zip(specs, reads, strict=True)
-            )
+            for spec, probe in zip(specs, probes, strict=True):
+                status = berth_policy.assess(probe.berth, berth, host=host, repo_dir=spec.repo_dir)
+                runtime = runtime_policy.assess_runtime(probe.runtime, status.stamp.found)
+                statuses.append(replace(status, runtime=runtime))
         return DoctorReport(
             berth_version=berth.version, statuses=tuple(statuses), skipped=tuple(skipped)
         )

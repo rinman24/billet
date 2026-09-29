@@ -20,8 +20,11 @@ from billet.contracts import (
     PlanStep,
     ProvisioningSpec,
     RemoteHost,
+    RuntimeState,
     WorkspaceBerthRead,
     WorkspacePlanStep,
+    WorkspaceProbe,
+    WorkspaceRuntimeRead,
     WorkspaceSpec,
 )
 from billet.infrastructure.process import CompletedProcess
@@ -138,6 +141,37 @@ class FakeProcessRunner:
         if check and result.returncode != 0:
             raise ProcessError(result.argv, result.returncode, result.stderr)
         return result
+
+    def converse(
+        self,
+        argv: Sequence[str],
+        *,
+        opening: str,
+        sentinel: str,
+        reply: Callable[[str], str],
+    ) -> CompletedProcess:
+        """Replay the scripted stdout: the part up to ``sentinel`` feeds ``reply``.
+
+        The call is recorded once, like ``run``; its input is the opening plus the reply.
+        """
+        argv_list = list(argv)
+        self.calls.append(tuple(argv_list))
+        self.timeouts.append(None)
+        scripted = self._handler(argv_list)
+        head: list[str] = []
+        second = ""
+        for line in scripted.stdout.splitlines(keepends=True):
+            head.append(line)
+            if line.rstrip("\n") == sentinel:
+                second = reply("".join(head))
+                break
+        self.inputs.append(opening + second)
+        return CompletedProcess(
+            argv=tuple(argv_list),
+            returncode=scripted.returncode,
+            stdout=scripted.stdout,
+            stderr=scripted.stderr,
+        )
 
     def commands(self) -> list[str]:
         """Each recorded call joined into one string, for substring assertions."""
@@ -371,12 +405,19 @@ def make_berth_read(
     return WorkspaceBerthRead(workspace=key, head=head, files=files)
 
 
+def make_runtime_read(*log_lines: str) -> WorkspaceRuntimeRead:
+    """Return a running container's read; with no lines, a clean start on the shipped Berth."""
+    lines = log_lines or (f"dev-entrypoint: berth={make_packaged_berth().version}",)
+    return WorkspaceRuntimeRead(RuntimeState.RUNNING, log_lines=lines)
+
+
 class FakeDoctorAccess:
-    """A DoctorAccess that records each probed Host and returns scripted reads.
+    """A DoctorAccess that records each probed Host and returns scripted probes.
 
     ``unreachable`` / ``failing`` name Host *ips* whose probe raises the way the real access
     does (``HostOperationError`` for an SSH transport failure, ``ProcessError`` otherwise).
-    ``overrides`` maps a Workspace key to the file overrides its read carries.
+    ``overrides`` maps a Workspace key to the file overrides its read carries; ``runtimes``
+    maps a Workspace key to its runtime read (default: running, clean, on the shipped Berth).
     """
 
     def __init__(
@@ -385,20 +426,26 @@ class FakeDoctorAccess:
         unreachable: Sequence[str] = (),
         failing: Sequence[str] = (),
         overrides: Mapping[str, Mapping[str, str | None]] | None = None,
+        runtimes: Mapping[str, WorkspaceRuntimeRead] | None = None,
     ) -> None:
         self._unreachable = frozenset(unreachable)
         self._failing = frozenset(failing)
         self._overrides = overrides or {}
+        self._runtimes = runtimes or {}
         self.calls: list[tuple[str, tuple[str, ...]]] = []
 
-    def read_berths(
+    def probe(
         self, remote: RemoteHost, specs: Sequence[WorkspaceSpec]
-    ) -> tuple[WorkspaceBerthRead, ...]:
+    ) -> tuple[WorkspaceProbe, ...]:
         self.calls.append((remote.ip, tuple(spec.key for spec in specs)))
         if remote.ip in self._unreachable:
             raise HostOperationError(f"could not reach {remote.ip} over SSH")
         if remote.ip in self._failing:
             raise ProcessError(["ssh", remote.ip, "bash -se"], 1, "bash: boom")
         return tuple(
-            make_berth_read(spec.key, overrides=self._overrides.get(spec.key)) for spec in specs
+            WorkspaceProbe(
+                berth=make_berth_read(spec.key, overrides=self._overrides.get(spec.key)),
+                runtime=self._runtimes.get(spec.key, make_runtime_read()),
+            )
+            for spec in specs
         )

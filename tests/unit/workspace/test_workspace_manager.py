@@ -9,7 +9,10 @@ from billet.contracts import (
     DoctorFilters,
     DoctorSkip,
     RemoteHost,
+    RunningBerthState,
+    RuntimeState,
     SshConfigBlock,
+    WorkspaceRuntimeRead,
     WorkspaceSpec,
     WorkspaceStepKind,
 )
@@ -26,6 +29,7 @@ from tests.unit._fakes import (
     make_devcontainer_facts,
     make_packaged_berth,
     make_remote_host,
+    make_runtime_read,
     make_workspace_spec,
 )
 
@@ -425,3 +429,20 @@ def test_doctor_over_the_real_access_makes_exactly_one_ssh_call_per_host() -> No
     assert len(runner.calls) == 2
     assert [call[-2] for call in runner.calls] == ["azureuser@gswa-devbox", "azureuser@other-box"]
     assert len(report.statuses) == 3
+
+
+def test_doctor_attaches_each_workspace_runtime_against_its_checkout_stamp() -> None:
+    doctor = FakeDoctorAccess(
+        overrides={"billet": {"berth.version": "2\n"}},
+        runtimes={
+            "billet": make_runtime_read("dev-entrypoint: berth=1"),
+            "squadra": WorkspaceRuntimeRead(RuntimeState.NOT_RUNNING),
+        },
+    )
+    report = _doctor_manager(doctor).doctor(DOCTOR_ITEMS, make_packaged_berth(), DoctorFilters())
+    runtime = {s.workspace: s.runtime for s in report.statuses}
+    gswa, billet, squadra = runtime["gswa-backend"], runtime["billet"], runtime["squadra"]
+    assert gswa is not None and gswa.berth_state is RunningBerthState.MATCH
+    assert billet is not None and billet.berth_state is RunningBerthState.DIFFERS
+    assert (billet.running_berth, billet.checkout_stamp) == ("1", 2)
+    assert squadra is not None and squadra.state is RuntimeState.NOT_RUNNING

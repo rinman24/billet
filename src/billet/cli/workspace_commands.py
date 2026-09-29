@@ -273,11 +273,13 @@ def doctor(
     host: _HostFilterOption = None,
     workspace: _WorkspaceFilterOption = None,
 ) -> None:
-    """Report each Workspace's Berth drift against the Berth this billet ships.
+    """Report each Workspace's Berth drift and runtime against the Berth this billet ships.
 
     Read-only, over one SSH session per Host (ADR-0015): each Workspace's Host checkout
     shows its short HEAD, its ``berth.version`` stamp, and whether ``dev-entrypoint.sh``,
     ``sshd.conf`` and ``authorized_keys-stub`` agree with billet's copies by directive hash.
+    Then, from the running container's entrypoint log (never an exec), the Berth it started
+    with, each mountpoint it repaired and each warning it printed.
     ``--host`` / ``--workspace`` filter the report. An unreachable Host is reported skipped
     and is never started. Warn, never fail: the exit status is 0 whatever the report says.
     """
@@ -307,7 +309,7 @@ def doctor(
             if registry.host(ws.host).manages_workspaces
         ]
         manager = workspace_manager_factory()
-        with _ui.planning_status(text="reading berths"):
+        with _ui.planning_status(text="reading berths and entrypoint logs"):
             report = manager.doctor(items, berth, DoctorFilters(host=host, workspace=workspace))
         _ui.render_doctor(report, __version__)
     except BilletError as exc:

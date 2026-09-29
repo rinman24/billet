@@ -255,7 +255,12 @@ def test_doctor_reports_ok_berth_and_names_the_installed_billet(
     assert "berth 1" in result.output
     assert "not checked: Dockerfile.snippet, docker-compose.snippet.yml" in result.output
     assert "gswa-backend" in result.output and "head d223cd5" in result.output
-    for line in ("ok: berth.version 1", "ok: dev-entrypoint.sh", "ok: sshd.conf"):
+    for line in (
+        "ok: berth.version 1",
+        "ok: dev-entrypoint.sh",
+        "ok: sshd.conf",
+        "ok: running berth=1",
+    ):
         assert line in result.output
     assert "warn:" not in result.output
     assert "0 warnings across 1 workspace" in result.output
