@@ -129,3 +129,19 @@ layers = [
     "billet.infrastructure",
     "billet.shared",
 ]
+
+# Pure engines (ADR-0001; FA-8) depend only on `contracts` and `shared`. The layers contract
+# above still lets `billet.workspace` import `access`/`host`/`infrastructure` (all lower), so
+# this contract is what proves an engine — the Berth drift policy included — does no I/O by
+# construction.
+[[tool.importlinter.contracts]]
+name = "pure workspace engines import only contracts and shared"
+type = "forbidden"
+source_modules = ["billet.workspace.engine"]
+forbidden_modules = [
+    "billet.cli",
+    "billet.workspace.manager",
+    "billet.host",
+    "billet.access",
+    "billet.infrastructure",
+]
