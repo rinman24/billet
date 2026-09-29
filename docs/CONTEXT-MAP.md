@@ -94,9 +94,12 @@ implemented, and 5 is deferred again.
    break Separate Ways: a non-GenShift consumer keeps copying files.
 4. **`doctor` implementation** ([ADR-0015](adr/adr-0015-billet-doctor.md)). *Berth drift
    implemented (2026-09-29):* the pure `berth_policy` engine, the `DoctorAccess` seam (one
-   sectioned SSH probe per Host) and the `BerthStatus`/`BerthFileStatus` contracts. The runtime
-   report (`docker compose ps` and the entrypoint's log, including Locker ownership) is the next
-   slice. The compose-file read ADR-0002 §1 would grant to `doctor` stays proposed: no check
+   sectioned SSH probe per Host) and the `BerthStatus`/`BerthFileStatus` contracts. *Runtime
+   report implemented (2026-09-29):* in the same SSH session, `docker compose ps` finds each
+   service's running container and `docker logs` gives the entrypoint's lines. The pure
+   `runtime_policy` engine turns them into a `RuntimeReport`: the running Berth against the
+   checkout's stamp, and the Locker-ownership repairs and warnings. `doctor` never execs into a
+   container. The compose-file read ADR-0002 §1 would grant to `doctor` stays proposed: no check
    opens a compose file yet.
 5. **Start-time CONFORM readback and compose preflight.** Neither a `stat` of Locker ownership
    appended to the `start` script nor a `docker compose config -q` preflight for undeclared

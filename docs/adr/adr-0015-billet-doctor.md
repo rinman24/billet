@@ -3,9 +3,11 @@
 ## Status
 
 Accepted (2026-09-29). Implemented for the Berth-file checks: `billet doctor` compares each
-Workspace's copied Berth files with the Berth the installed billet ships. The runtime report
-(container state and the entrypoint's Locker-ownership log) is the next slice. The compose-file
-read below remains **proposed and not in effect**: no check in this cycle opens a compose file.
+Workspace's copied Berth files with the Berth the installed billet ships. Implemented for the
+runtime report (2026-09-29): for each running Workspace, `doctor` reports the Berth the
+container started with against the checkout's stamp, and the Locker-ownership repairs and
+warnings, all from the entrypoint's own log. The compose-file read below remains **proposed and
+not in effect**: no check in this cycle opens a compose file.
 
 Proposed 2026-09-14 as the decision record for the verification half of
 [ADR-0012](adr-0012-the-berth.md) and
@@ -43,16 +45,24 @@ is a capability nothing exercises.
 ## Decision
 
 **billet gains a `doctor` verb that renders a report over the registry and never mutates. It
-computes Berth drift by directive hash against the Berth the installed billet ships and, in the
-next slice, reports each running Workspace's runtime state and Locker ownership from the
-entrypoint's own log. Warn, never fail. No Dockerfile parsing.**
+computes Berth drift by directive hash against the Berth the installed billet ships and reports
+each running Workspace's runtime state and Locker ownership from the entrypoint's own log. Warn, never fail. No Dockerfile parsing.**
 
 1. **Shape** (rewritten 2026-09-29). `billet doctor [--host <name>] [--workspace <name>]`. Every
    check goes through the Host: `repo_dir` is a Host path, relative to the admin user's home,
    and billet has no Mac-side checkout path anywhere, so the file Docker reads is the file
    `doctor` reads. `--host` and `--workspace` are filters. Each Host is probed with **one
    sectioned script over one SSH session** (`bash -se`, the `host specs` precedent), holding a
-   section per Workspace; it runs only `git -C <repo_dir> rev-parse --short HEAD` and `cat`. An
+   section per Workspace. The script is sent in two parts over that one session. The *reads*
+   run only `git -C <repo_dir> rev-parse --short HEAD` and `cat`: of the copied Berth files, and
+   of `devcontainer.json`. The *runtime* part is then built by billet from that
+   `devcontainer.json`, with the parser `start` uses (*amended 2026-09-29*). Per Workspace, under
+   the same compose prelude as `start` (`cd <repo_dir>`, billet's exports), it runs
+   `docker compose -f … ps --status running -q <service>` and then
+   `docker logs <id> 2>&1 | grep '^dev-entrypoint: '`. The lookup is scoped by service name,
+   so Workspaces that share a compose project name on one Host stay apart. A Workspace with no
+   running container reports `skipped: not running`. `doctor` never execs into a container and
+   never runs a compose verb that changes state. An
    unreachable Host is reported `skipped: host <name> unreachable`, following `billet ls`, and is
    never started or allocated: `doctor` reaches a Host through its ssh-config alias and makes no
    `az` call. It reads the checkout as it is and never fetches; each Workspace's section shows
@@ -67,7 +77,7 @@ entrypoint's own log. Warn, never fail. No Dockerfile parsing.**
    | Check | Source | Report |
    |---|---|---|
    | Berth version stamp and Berth-file drift | `.devcontainer/` in the Host checkout; billet's side is the installed package's own copy of `templates/workspace/` (force-included into the wheel, read through `importlib.resources`, never a repo path) | the stamp: `ok`, or a `warn` reading `behind by N`, `ahead (upgrade billet)` for a consumer newer than a stale install, or `unknown` when `berth.version` is missing. Then per copied file (`dev-entrypoint.sh`, `sshd.conf`, `authorized_keys-stub`): `ok`; `warn: <file> missing` when the file is absent; or `warn: <file> directive drift (N lines)` followed by a unified diff of the *normalized* lines, capped at 20 lines with `… (M more)`. The **directive hash** is ADR-0012 item 5 with its 2026-09-29 clarification: fold continuations, strip each line, drop blank lines, drop lines starting `#`. The two merged snippets (`Dockerfile.snippet`, `docker-compose.snippet.yml`) are not checked, and the report says so in one line: a snippet-subset check would false-positive on everything ADR-0003 grandfathered |
-   | Locker ownership (**next**: the runtime-report slice) | the entrypoint's own log (`docker logs`): its `berth=N` line and the ADR-0013 repair lines. `doctor` never execs into a container | `warn: <path> owned by uid <n>, not writable by dev`, and what the repair fixed |
+   | Runtime and Locker ownership (in effect 2026-09-29) | the entrypoint's own log (`docker logs` of the service's running container): its `berth=N` line and the ADR-0013 repair lines. Only the current run counts: a restarted container keeps its log, so the report reads from the last `berth=` line on. `doctor` never execs into a container | the running Berth against the checkout's stamp: `ok: running berth=N`, or a `warn` reading `running berth=N, checkout stamp M` (also for `berth=unknown` or a missing stamp) or `running berth not logged`. Each `repaired` line: `ok (repaired at start): <path> (was <owner>:<group> <mode>)`. Each `warning:` or `WARNING:` line: `warn:` and the entrypoint's own text, such as `warn: <path> owned by uid <n>; not repaired`. Other entrypoint lines (`created …`, `skipping …`) are informational and not printed. A stopped container: `skipped: not running`. *Accepted limitation:* ownership that changes after start is not seen; nothing in the fleet does that |
 
    The report header names the installed billet's version and the Berth version it ships.
 
@@ -94,7 +104,10 @@ entrypoint's own log. Warn, never fail. No Dockerfile parsing.**
    `authorized_keys-stub`, `berth.version`), read with `cat` from the Host checkout. **This
    grant is in effect.** Opening the consumer's compose files as text stays **proposed, not in
    effect**: no check in this cycle opens one, and a grant nothing exercises reintroduces the
-   drift between ADR text and code (ADR-0014 item 4). Both are the ADR-0002 §1 amendment, and
+   drift between ADR text and code (ADR-0014 item 4). The runtime report does not change this.
+   It reads `devcontainer.json`, the file `start` and `connect` already read, and passes the
+   compose files it names to `docker compose ps` *by name*, as `start` passes them to
+   `docker compose up`. Compose reads those files; `doctor` does not. Both are the ADR-0002 §1 amendment, and
    both are granted to `doctor` only: `start` and `connect` continue to read five fields of one
    file. They are reads of a *definition* (ADR-0014 item 1) and stay reads; `doctor` writes
    nothing anywhere.
@@ -113,12 +126,18 @@ entrypoint's own log. Warn, never fail. No Dockerfile parsing.**
    billet.cli            + `doctor` verb and its renderer in _ui.py (renders; never mutates)
    billet.workspace      + berth_policy engine — pure: normalize, directive_hash, compare_stamp,
                            compare_file, the 20-line diff cap; imports only contracts
+                         + runtime_policy engine — pure: entrypoint log lines to RuntimeReport
+                           (running Berth, repairs, warnings), and the running-versus-checkout
+                           Berth compare; imports only contracts
                          + WorkspaceManager.doctor(): groups Workspaces by Host, one probe each
-   billet.access         + SshDoctorAccess — the DoctorAccess seam: one sectioned probe per Host
+   billet.access         + SshDoctorAccess — the DoctorAccess seam: one sectioned probe per Host,
+                           reads then runtime over one SSH session
                          + packaged_berth — the shipped Berth, through importlib.resources
    billet.contracts      + DoctorAccess (Protocol); BerthStatus, BerthFileStatus, StampStatus,
-                           PackagedBerth, WorkspaceBerthRead, DoctorReport (frozen dataclasses);
-                           RuntimeReport in the next slice
+                           RuntimeReport, PackagedBerth, WorkspaceBerthRead,
+                           WorkspaceRuntimeRead, WorkspaceProbe, DoctorReport (frozen dataclasses)
+   billet.infrastructure + ConversationRunner — one process whose stdin script is written in two
+                           parts, the second computed from the first part's output
    ```
 
    `DoctorAccess` is its own seam rather than a method on `ContainerAccess`: it has one caller
