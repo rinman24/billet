@@ -12,16 +12,19 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from billet import __version__
 from billet.cli import _ui, workspace_commands as wc
 from billet.cli.app import app
-from billet.contracts import HostPowerState, HostStatus
-from billet.shared.errors import HostOperationError
+from billet.contracts import HostPowerState, HostStatus, PackagedBerth
+from billet.shared.errors import ConfigError, HostOperationError
 from billet.workspace.manager.workspace_manager import WorkspaceManager
 from tests.unit._fakes import (
     FakeContainerAccess,
+    FakeDoctorAccess,
     FakeHostProvider,
     FakeSourceAccess,
     FakeSshConfigAccess,
+    make_packaged_berth,
 )
 
 runner = CliRunner()
@@ -66,6 +69,7 @@ def _install(
     source: FakeSourceAccess | None = None,
     container: FakeContainerAccess | None = None,
     ssh_config: FakeSshConfigAccess | None = None,
+    doctor: FakeDoctorAccess | None = None,
 ) -> tuple[FakeHostProvider, FakeSourceAccess, FakeContainerAccess, FakeSshConfigAccess]:
     prov = provider or FakeHostProvider(
         HostStatus(HostPowerState.RUNNING, "20.0.0.5", "VM running")
@@ -73,7 +77,7 @@ def _install(
     src = source or FakeSourceAccess()
     cont = container or FakeContainerAccess()
     cfg = ssh_config or FakeSshConfigAccess()
-    manager = WorkspaceManager(src, cont, cfg)
+    manager = WorkspaceManager(src, cont, cfg, doctor or FakeDoctorAccess())
 
     def _provider_factory(_subscription_id: str) -> FakeHostProvider:
         return prov
@@ -83,6 +87,7 @@ def _install(
 
     monkeypatch.setattr(wc, "provider_factory", _provider_factory)
     monkeypatch.setattr(wc, "workspace_manager_factory", _manager_factory)
+    monkeypatch.setattr(wc, "packaged_berth_reader", make_packaged_berth)
     return prov, src, cont, cfg
 
 
@@ -234,6 +239,108 @@ def test_ls_is_a_pure_query_over_an_adopted_host_without_provisioning_keys(
     json_result = runner.invoke(app, ["ls", "--config", str(path), "--json"])
     assert json_result.exit_code == 0
     assert json.loads(json_result.stdout)  # still one valid record per workspace
+
+
+# --- doctor ------------------------------------------------------------------------
+
+
+def test_doctor_reports_ok_berth_and_names_the_installed_billet(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    doctor = FakeDoctorAccess()
+    _install(monkeypatch, doctor=doctor)
+    result = runner.invoke(app, ["doctor", "--config", str(config_file)])
+    assert result.exit_code == 0, result.output
+    assert f"billet {__version__}" in result.output
+    assert "berth 1" in result.output
+    assert "not checked: Dockerfile.snippet, docker-compose.snippet.yml" in result.output
+    assert "gswa-backend" in result.output and "head d223cd5" in result.output
+    for line in ("ok: berth.version 1", "ok: dev-entrypoint.sh", "ok: sshd.conf"):
+        assert line in result.output
+    assert "warn:" not in result.output
+    assert "0 warnings across 1 workspace" in result.output
+    assert doctor.calls == [("gswa-devbox", ("gswa-backend",))]  # via the ssh alias, no az
+
+
+def test_doctor_warns_on_drift_and_still_exits_zero(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    template = make_packaged_berth().files["dev-entrypoint.sh"]
+    drifted = template + 'ENV_SECRET_EXCLUDE="AZURE_DEVOPS_EXT_PAT"\n'
+    _install(
+        monkeypatch,
+        doctor=FakeDoctorAccess(
+            overrides={"gswa-backend": {"dev-entrypoint.sh": drifted, "berth.version": None}}
+        ),
+    )
+    result = runner.invoke(app, ["doctor", "--config", str(config_file)])
+    assert result.exit_code == 0
+    assert "warn: dev-entrypoint.sh directive drift (1 line)" in result.output
+    assert '+ENV_SECRET_EXCLUDE="AZURE_DEVOPS_EXT_PAT"' in result.output
+    assert "warn: berth.version unknown" in result.output
+
+
+def test_doctor_skips_an_unreachable_host_with_exit_zero(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    prov, *_ = _install(monkeypatch, doctor=FakeDoctorAccess(unreachable=["gswa-devbox"]))
+    result = runner.invoke(app, ["doctor", "--config", str(config_file)])
+    assert result.exit_code == 0
+    assert "skipped: host devbox unreachable" in result.output
+    assert prov.calls == []  # never started, never even asked
+
+
+def test_doctor_rejects_an_unknown_filter(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    _install(monkeypatch)
+    result = runner.invoke(app, ["doctor", "--config", str(config_file), "--host", "nope"])
+    assert result.exit_code == 1
+    result = runner.invoke(app, ["doctor", "--config", str(config_file), "--workspace", "nope"])
+    assert result.exit_code == 1
+
+
+def test_doctor_workspace_filter_narrows_the_probe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        _CONFIG
+        + """
+[workspaces.billet]
+host = "devbox"
+repo_url = "git@github.com:rinman24/billet.git"
+repo_dir = "billet"
+container_ssh_port = 2223
+host_alias = "gswa-devbox"
+container_alias = "billet-container"
+"""
+    )
+    doctor = FakeDoctorAccess()
+    _install(monkeypatch, doctor=doctor)
+    result = runner.invoke(app, ["doctor", "--config", str(path), "--workspace", "billet"])
+    assert result.exit_code == 0
+    assert doctor.calls == [("gswa-devbox", ("billet",))]
+
+
+def test_doctor_without_a_packaged_berth_fails_with_the_fix(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    _install(monkeypatch)
+
+    def _absent() -> PackagedBerth:
+        raise ConfigError("this billet install carries no packaged Berth")
+
+    monkeypatch.setattr(wc, "packaged_berth_reader", _absent)
+    result = runner.invoke(app, ["doctor", "--config", str(config_file)])
+    assert result.exit_code == 1
+
+
+def test_doctor_is_registered_and_on_the_command_surface() -> None:
+    result = runner.invoke(app, ["--help"])
+    assert "doctor" in result.output
+    commands = [cmd for _, _, group in _ui._COMMAND_SURFACE for cmd, _ in group]  # pyright: ignore[reportPrivateUsage]
+    assert "doctor" in commands
 
 
 # --- start -------------------------------------------------------------------------

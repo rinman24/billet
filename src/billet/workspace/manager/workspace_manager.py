@@ -14,10 +14,16 @@ from collections.abc import Callable, Sequence
 import shlex
 
 from billet.contracts import (
+    BerthStatus,
     ContainerAccess,
     DevcontainerFacts,
+    DoctorAccess,
+    DoctorFilters,
+    DoctorReport,
+    DoctorSkip,
     HostSpec,
     NullPlanObserver,
+    PackagedBerth,
     PlanObserver,
     RemoteHost,
     SourceAccess,
@@ -31,6 +37,7 @@ from billet.contracts import (
 )
 from billet.infrastructure import ssh
 from billet.shared.errors import BilletError, HostOperationError
+from billet.workspace.engine import berth_policy
 from billet.workspace.engine.placement import HostPlacementPolicy
 from billet.workspace.engine.port_allocator import PortAllocator
 from billet.workspace.engine.ssh_config_engine import SshConfigEngine
@@ -45,10 +52,12 @@ class WorkspaceManager:
         source: SourceAccess,
         container: ContainerAccess,
         ssh_config: SshConfigAccess,
+        doctor: DoctorAccess,
     ) -> None:
         self._source = source
         self._container = container
         self._ssh_config = ssh_config
+        self._doctor = doctor
         self._allocator = PortAllocator()
         self._placement = HostPlacementPolicy()
         self._engine = SshConfigEngine()
@@ -307,6 +316,50 @@ class WorkspaceManager:
         except BilletError:
             return False, True
 
+    # --- doctor (billet doctor) -----------------------------------------------------
+
+    def doctor(
+        self,
+        items: Sequence[tuple[WorkspaceSpec, RemoteHost]],
+        berth: PackagedBerth,
+        filters: DoctorFilters,
+    ) -> DoctorReport:
+        """Compare each selected Workspace's copied Berth files with the shipped ``berth``.
+
+        Workspaces are grouped by Host and each Host is probed exactly once (ADR-0015 item 1,
+        D-A4-10). ``filters`` narrow the selection. A Host that cannot be reached over SSH is
+        reported as skipped and never started (D-A4-9); any other probe fault skips that Host
+        with its message, so one bad Host never hides the rest. ``doctor`` never mutates.
+        """
+        groups: dict[str, list[tuple[WorkspaceSpec, RemoteHost]]] = {}
+        for spec, remote in items:
+            if filters.host is not None and spec.host != filters.host:
+                continue
+            if filters.workspace is not None and spec.key != filters.workspace:
+                continue
+            groups.setdefault(spec.host, []).append((spec, remote))
+        statuses: list[BerthStatus] = []
+        skipped: list[DoctorSkip] = []
+        for host, members in groups.items():
+            specs = [spec for spec, _ in members]
+            keys = tuple(spec.key for spec in specs)
+            try:
+                reads = self._doctor.read_berths(members[0][1], specs)
+            except HostOperationError:
+                skipped.append(DoctorSkip(host=host, reason="unreachable", workspaces=keys))
+                continue
+            except BilletError as exc:
+                reason = f"probe failed: {_first_line(exc)}"
+                skipped.append(DoctorSkip(host=host, reason=reason, workspaces=keys))
+                continue
+            statuses.extend(
+                berth_policy.assess(read, berth, host=host, repo_dir=spec.repo_dir)
+                for spec, read in zip(specs, reads, strict=True)
+            )
+        return DoctorReport(
+            berth_version=berth.version, statuses=tuple(statuses), skipped=tuple(skipped)
+        )
+
     # --- ssh-config ----------------------------------------------------------------
 
     def render_ssh_config(self, blocks: Sequence[SshConfigBlock]) -> str:
@@ -318,6 +371,11 @@ class WorkspaceManager:
         path = self._ssh_config.write_conf(self._engine.render_conf(blocks))
         self._ssh_config.ensure_include()
         return path
+
+
+def _first_line(exc: BilletError) -> str:
+    lines = str(exc).splitlines()
+    return lines[0] if lines else type(exc).__name__
 
 
 _STRING_FIELDS = (

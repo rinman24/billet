@@ -26,9 +26,16 @@ from billet.cli._ui import (
     render_error,
 )
 from billet.contracts import (
+    BerthFileState,
+    BerthFileStatus,
+    BerthStatus,
+    DoctorReport,
+    DoctorSkip,
     HostPowerState,
     Plan,
     PlanStep,
+    StampState,
+    StampStatus,
     StepKind,
     WorkspacePlan,
     WorkspacePlanStep,
@@ -740,3 +747,72 @@ def test_render_ls_json_is_machine_readable() -> None:
         {"host": "devbox", "key": "api", "state": "running", "alias": "api.devbox", "port": 2222},
         {"host": "devbox", "key": "web", "state": "stopped", "alias": "web.devbox", "port": 2224},
     ]
+
+
+# --- doctor view -----------------------------------------------------------------------
+
+
+def _doctor_report() -> DoctorReport:
+    drift = BerthFileStatus(
+        "dev-entrypoint.sh",
+        BerthFileState.DRIFT,
+        changed_lines=26,
+        diff=tuple(f"+echo {n}" for n in range(20)),
+        diff_more=6,
+    )
+    status = BerthStatus(
+        workspace="gswa-backend",
+        host="devbox",
+        repo_dir="gswa-backend",
+        head="d223cd5",
+        stamp=StampStatus(StampState.BEHIND, shipped=3, found=1),
+        files=(
+            drift,
+            BerthFileStatus("sshd.conf", BerthFileState.OK),
+            BerthFileStatus("authorized_keys-stub", BerthFileState.MISSING),
+        ),
+    )
+    ahead = BerthStatus(
+        workspace="billet",
+        host="devbox",
+        repo_dir="billet",
+        head=None,
+        stamp=StampStatus(StampState.AHEAD, shipped=3, found=4),
+        files=(),
+    )
+    skip = DoctorSkip(host="fleet", reason="unreachable", workspaces=("squadra",))
+    return DoctorReport(berth_version=3, statuses=(status, ahead), skipped=(skip,))
+
+
+def test_render_doctor_plain_lines() -> None:
+    console, buffer = _plain_console()
+    _ui.render_doctor(_doctor_report(), "0.4.0", console=console)
+    lines = buffer.getvalue().splitlines()
+    assert lines[0] == "billet 0.4.0 · berth 3"
+    assert "· not checked: Dockerfile.snippet, docker-compose.snippet.yml" in lines[2]
+    assert "host devbox" in lines
+    assert "  gswa-backend · head d223cd5" in lines
+    assert "    warn: berth.version behind by 2 (found 1)" in lines
+    assert "    warn: dev-entrypoint.sh directive drift (26 lines)" in lines
+    assert "    ok: sshd.conf" in lines
+    assert "    warn: authorized_keys-stub missing" in lines
+    assert "    warn: berth.version ahead (upgrade billet) (found 4)" in lines
+    assert "  billet · head none (billet is not a git checkout)" in lines
+    assert "skipped: host fleet unreachable (squadra)" in lines
+    assert lines[-1] == "· 4 warnings across 2 workspaces, 1 host skipped"
+
+
+def test_render_doctor_caps_the_diff_at_twenty_lines_with_a_more_marker() -> None:
+    console, buffer = _plain_console()
+    _ui.render_doctor(_doctor_report(), "0.4.0", console=console)
+    diff = [line.strip() for line in buffer.getvalue().splitlines() if line.startswith("      ")]
+    assert diff[:20] == [f"+echo {n}" for n in range(20)]
+    assert diff[20:] == ["… (6 more)"]
+
+
+def test_render_doctor_on_a_terminal_uses_the_same_words() -> None:
+    console = _terminal_console()
+    _ui.render_doctor(_doctor_report(), "0.4.0", console=console)
+    text = console.export_text()
+    assert "warn: dev-entrypoint.sh directive drift (26 lines)" in text
+    assert "skipped: host fleet unreachable" in text

@@ -26,10 +26,18 @@ from rich.text import Text
 from rich.theme import Theme
 
 from billet.contracts import (
+    BERTH_HASHED_FILES,
+    BERTH_UNCHECKED_SNIPPETS,
+    BERTH_VERSION_FILE,
+    BerthFileState,
+    BerthFileStatus,
+    DoctorReport,
     HostPowerState,
     HostSpec,
     Plan,
     PlanStep,
+    StampState,
+    StampStatus,
     StepKind,
     WorkspacePlan,
     WorkspacePlanStep,
@@ -371,6 +379,7 @@ _COMMAND_SURFACE: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
             ("stop <key>", "stop the compose stack"),
             ("connect <key>", "ssh in and attach to tmux"),
             ("ls", "list berths — running · stopped · open"),
+            ("doctor", "report berth drift against this billet"),
             ("ssh-config", "write ~/.ssh/config.d/billet.conf"),
             ("rm <key>", "how to deregister"),
         ),
@@ -643,6 +652,140 @@ def render_ls_json(groups: Sequence[LsHostGroup], console: Console | None = None
     ]
     out = console if console is not None else get_console()
     out.print(Text(json.dumps(records)), soft_wrap=True)
+
+
+# --- doctor view (ADR-0015) -------------------------------------------------------------
+
+# Each report line is (depth, verdict, text): verdict "ok" / "warn" / "skip" leads the line,
+# "diff" is a normalized diff line, "" is a heading or note. The tty and piped renderers
+# share this list, so the words are identical and only the gutter and color differ.
+_DoctorLine = tuple[int, str, str]
+
+
+def _stamp_line(stamp: StampStatus) -> tuple[str, str]:
+    name = BERTH_VERSION_FILE
+    if stamp.state is StampState.OK:
+        return "ok", f"{name} {stamp.found}"
+    if stamp.state is StampState.BEHIND:
+        return "warn", f"{name} behind by {stamp.behind_by} (found {stamp.found})"
+    if stamp.state is StampState.AHEAD:
+        return "warn", f"{name} ahead (upgrade billet) (found {stamp.found})"
+    return "warn", f"{name} unknown (missing, or not one positive integer)"
+
+
+def _lines(count: int) -> str:
+    return f"{count} line" if count == 1 else f"{count} lines"
+
+
+def _more_marker(count: int) -> str:
+    ellipsis = "..." if glyphs() is _ASCII_GLYPHS else "…"
+    return f"{ellipsis} ({count} more)"
+
+
+def _file_lines(status: BerthFileStatus) -> list[_DoctorLine]:
+    if status.state is BerthFileState.OK:
+        return [(2, "ok", status.file)]
+    if status.state is BerthFileState.MISSING:
+        return [(2, "warn", f"{status.file} missing")]
+    lines: list[_DoctorLine] = [
+        (2, "warn", f"{status.file} directive drift ({_lines(status.changed_lines)})")
+    ]
+    lines.extend((3, "diff", line) for line in status.diff)
+    if status.diff_more:
+        lines.append((3, "diff", _more_marker(status.diff_more)))
+    return lines
+
+
+def doctor_lines(report: DoctorReport, billet_version: str) -> list[_DoctorLine]:
+    """Build the ``doctor`` report as ordered ``(depth, verdict, text)`` lines."""
+    hashed = ", ".join(BERTH_HASHED_FILES)
+    lines: list[_DoctorLine] = [
+        (0, "", f"billet {billet_version} {glyphs().info} berth {report.berth_version}"),
+        (0, "note", f"compared: {BERTH_VERSION_FILE} (stamp), {hashed} (directive hash)"),
+        (
+            0,
+            "note",
+            f"not checked: {', '.join(BERTH_UNCHECKED_SNIPPETS)} (merged into repo files)",
+        ),
+    ]
+    host: str | None = None
+    for status in report.statuses:
+        if status.host != host:
+            host = status.host
+            lines.append((0, "host", f"host {host}"))
+        head = (
+            status.head
+            if status.head is not None
+            else f"none ({status.repo_dir} is not a git checkout)"
+        )
+        lines.append((1, "", f"{status.workspace} {glyphs().info} head {head}"))
+        lines.append((2, *_stamp_line(status.stamp)))
+        for file_status in status.files:
+            lines.extend(_file_lines(file_status))
+    for skip in report.skipped:
+        lines.append((0, "skip", f"host {skip.host} {skip.reason} ({', '.join(skip.workspaces)})"))
+    return lines
+
+
+def doctor_warning_count(report: DoctorReport) -> int:
+    """Count the ``warn`` lines of a report (the stamp plus each non-ok file)."""
+    return sum(
+        (status.stamp.state is not StampState.OK)
+        + sum(f.state is not BerthFileState.OK for f in status.files)
+        for status in report.statuses
+    )
+
+
+_DOCTOR_VERDICT: dict[str, tuple[str, str]] = {
+    "ok": ("ok", "done"),
+    "warn": ("warn", "caution"),
+    "skip": ("skipped", "caution"),
+}
+
+
+def _doctor_diff_style(text: str) -> str:
+    if text.startswith("+"):
+        return "building"
+    if text.startswith("-"):
+        return "caution"
+    return "meta"
+
+
+def render_doctor(
+    report: DoctorReport, billet_version: str, console: Console | None = None
+) -> None:
+    """Render ``billet doctor``: glyph gutters and color on a tty, plain lines when piped.
+
+    A drifted file prints ``warn: <file> directive drift (N lines)`` and then the capped
+    unified diff of its *normalized* lines. The report is informational: callers exit 0.
+    """
+    out = console if console is not None else get_console()
+    plain = not out.is_terminal
+    for depth, verdict, text in doctor_lines(report, billet_version):
+        indent = "  " * depth
+        if verdict == "host" and not plain:
+            out.print()
+            out.print(Text(f"{indent}{text}", style="heading"), soft_wrap=True)
+        elif verdict in _DOCTOR_VERDICT:
+            word, style = _DOCTOR_VERDICT[verdict]
+            line = Text(indent)
+            line.append(f"{word}:", style=style)
+            line.append(f" {text}")
+            out.print(line, soft_wrap=True)
+        elif verdict == "diff":
+            out.print(Text(f"{indent}{text}", style=_doctor_diff_style(text)), soft_wrap=True)
+        elif verdict == "note":
+            out.print(Text(f"{indent}{glyphs().info} {text}", style="meta"), soft_wrap=True)
+        else:
+            out.print(Text(f"{indent}{text}"), soft_wrap=True)
+    warnings = doctor_warning_count(report)
+    summary = (
+        f"{warnings} warning{'s' if warnings != 1 else ''} across "
+        f"{len(report.statuses)} workspace{'s' if len(report.statuses) != 1 else ''}"
+    )
+    if report.skipped:
+        summary += f", {len(report.skipped)} host{'s' if len(report.skipped) != 1 else ''} skipped"
+    out.print(Text(f"{glyphs().info} {summary}", style="meta"), soft_wrap=True)
 
 
 # --- empty state (§6.7) ----------------------------------------------------------------
