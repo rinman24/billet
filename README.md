@@ -40,7 +40,7 @@ and the host↔workspace mapping are derived live from Azure and resource tags.
 Both subsystems ship in Python. The **Host** subsystem drives the VM behind the
 `HostProvider` seam (`billet host up|stop|pin-ip|specs`), with a dry-run plan and a confirm gate on
 billable cold-create. The **Workspace** subsystem clones, builds, bootstraps, and connects a
-repo's devcontainer on a Host (`billet add|ls|start|stop|connect|ssh-config|rm`), reading each
+repo's devcontainer on a Host (`billet add|ls|doctor|start|stop|connect|ssh-config|rm`), reading each
 repo's `.devcontainer/devcontainer.json` as a read-only data contract. The Python tool now
 fully replaces the original shell scripts lifted from gswa-backend, which have been removed. The
 architecture is recorded in
@@ -113,8 +113,17 @@ billet start gswa-backend        # bring the Host up, then clone + compose up + 
 billet ssh-config                # write ~/.ssh/config.d/billet.conf (+ one Include line)
 billet connect gswa-backend      # ssh in and attach to the tmux session
 billet ls                        # show each Workspace and whether it is running
+billet doctor                    # report each Workspace's Berth drift (read-only, exit 0)
 billet stop gswa-backend         # stop the container (non-destructive)
 ```
+
+`billet doctor [--host <key>] [--workspace <key>]` compares each Workspace's Host checkout
+with the Berth the *installed* billet ships: the `berth.version` stamp, and
+`dev-entrypoint.sh`, `sshd.conf` and `authorized_keys-stub` by directive hash (comments and
+whitespace ignored). It reads over one SSH session per Host, shows each checkout's short HEAD,
+skips an unreachable Host without starting it, and always exits 0
+([ADR-0015](docs/adr/adr-0015-billet-doctor.md)). The templates ship inside the wheel, so run
+it from an installed billet; an editable checkout (`uv run`) does not carry them.
 
 The compose `service`, compose file(s), `workspaceFolder`, `remoteUser`, and
 `postCreateCommand` are read live from each repo's `.devcontainer/devcontainer.json` — billet

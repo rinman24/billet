@@ -2,13 +2,18 @@
 
 ## Status
 
-Proposed (2026-09-14); **implementation deferred to a later cycle.** Accepted as the decision
-record for the verification half of [ADR-0012](adr-0012-the-berth.md) and
+Accepted (2026-09-29). Implemented for the Berth-file checks: `billet doctor` compares each
+Workspace's copied Berth files with the Berth the installed billet ships. The runtime report
+(container state and the entrypoint's Locker-ownership log) is the next slice. The compose-file
+read below remains **proposed and not in effect**: no check in this cycle opens a compose file.
+
+Proposed 2026-09-14 as the decision record for the verification half of
+[ADR-0012](adr-0012-the-berth.md) and
 [ADR-0013](adr-0013-mountpoint-ownership-repaired-at-mount-time.md). Amends
-[ADR-0002](adr-0002-workspace-subsystem.md) §1 to permit billet to *read* the compose files it
-already resolves by name, for `doctor` only; the amendment takes effect when the `doctor` verb
-lands, not before ([ADR-0014](adr-0014-definition-versus-state.md) item 4). Nothing in billet
-0.4.0 implements this ADR.
+[ADR-0002](adr-0002-workspace-subsystem.md) §1 so `doctor` alone may *read* the Berth files a
+consumer copied (in effect from this release) and, when a check needs them, the compose files
+billet already resolves by name (proposed, [ADR-0014](adr-0014-definition-versus-state.md)
+item 4).
 
 ## Context
 
@@ -38,52 +43,88 @@ is a capability nothing exercises.
 ## Decision
 
 **billet gains a `doctor` verb that renders a report over the registry and never mutates. It
-computes Berth drift by directive hash, scans resolved compose files for deprecated names and
-undeclared volumes, and, per Host, reads back Locker ownership inside running containers.
-Warn, never fail. No Dockerfile parsing.**
+computes Berth drift by directive hash against the Berth the installed billet ships and, in the
+next slice, reports each running Workspace's runtime state and Locker ownership from the
+entrypoint's own log. Warn, never fail. No Dockerfile parsing.**
 
-1. **Shape.** `billet doctor [--host <name>] [--workspace <name>]`. Without `--host` it reads
-   only local files: the registry and each Workspace's checkout as billet already resolves it
-   (`repo_dir`, `dockerComposeFile` list). With `--host` it additionally runs read-only commands
-   over the existing single SSH session per Host. Output is one section per Workspace with
-   `ok` / `warn` lines; exit status is 0 unless `doctor` itself failed to run. `doctor` never
-   changes `start`'s plan and never adds work to `connect` (ADR-0009 invariant).
+1. **Shape** (rewritten 2026-09-29). `billet doctor [--host <name>] [--workspace <name>]`. Every
+   check goes through the Host: `repo_dir` is a Host path, relative to the admin user's home,
+   and billet has no Mac-side checkout path anywhere, so the file Docker reads is the file
+   `doctor` reads. `--host` and `--workspace` are filters. Each Host is probed with **one
+   sectioned script over one SSH session** (`bash -se`, the `host specs` precedent), holding a
+   section per Workspace; it runs only `git -C <repo_dir> rev-parse --short HEAD` and `cat`. An
+   unreachable Host is reported `skipped: host <name> unreachable`, following `billet ls`, and is
+   never started or allocated: `doctor` reaches a Host through its ssh-config alias and makes no
+   `az` call. It reads the checkout as it is and never fetches; each Workspace's section shows
+   the checkout's short HEAD, so a checkout lagging its remote is visible. Output is one section
+   per Workspace with `ok` / `warn` lines. The exit status is 0 whatever the report says, and
+   non-zero only when `doctor` itself could not run (a config error, or an install that carries
+   no packaged Berth). `doctor` never changes `start`'s plan and never adds work to `connect`
+   (ADR-0009 invariant).
 
 2. **What it checks, and the vocabulary each check uses.**
 
    | Check | Source | Report |
    |---|---|---|
-   | Berth version stamp vs the version billet ships | `.devcontainer/berth.version` in the checkout; `templates/workspace/berth.version` in billet | `behind by N` — then, per Berth file, whether its **directive hash** differs from billet's copy (ADR-0012 item 5); byte differences that agree in directives are `ok` |
-   | Deprecated variable names interpolated in compose | the compose files billet resolves onto `DevcontainerFacts.compose_files`, now opened | `warn: DEVBOX_AUTHORIZED_KEYS interpolated at <file>:<line>` — the Kubernetes-style deprecation `Warning` the 2026-09 window shipped without |
-   | Named volume mounted under `$HOME` with no `volumes:` declaration | `docker compose config` in the Host shell (behind `--host`) | `warn: undeclared volume <name>` — turns a VM-only `up` failure into a named preflight message |
-   | Locker ownership | `stat` of each mount target inside the running container (behind `--host`) | `warn: <path> owned by uid <n>, not writable by dev` |
-   | Berth readiness | presence of a marker the Berth 1+ entrypoint may write after its repair block (a later Berth revision) | informational |
+   | Berth version stamp and Berth-file drift | `.devcontainer/` in the Host checkout; billet's side is the installed package's own copy of `templates/workspace/` (force-included into the wheel, read through `importlib.resources`, never a repo path) | the stamp: `ok`, `behind by N`, `ahead (upgrade billet)` for a consumer newer than a stale install, or `unknown` when `berth.version` is missing. Then per copied file (`dev-entrypoint.sh`, `sshd.conf`, `authorized_keys-stub`): `ok`, `missing`, or `warn: <file> directive drift (N lines)` followed by a unified diff of the *normalized* lines, capped at 20 lines with `… (M more)`. The **directive hash** is ADR-0012 item 5 with its 2026-09-29 clarification: fold continuations, strip each line, drop blank lines, drop lines starting `#`. The two merged snippets (`Dockerfile.snippet`, `docker-compose.snippet.yml`) are not checked, and the report says so in one line: a snippet-subset check would false-positive on everything ADR-0003 grandfathered |
+   | Locker ownership (**next**: the runtime-report slice) | the entrypoint's own log (`docker logs`): its `berth=N` line and the ADR-0013 repair lines. `doctor` never execs into a container | `warn: <path> owned by uid <n>, not writable by dev`, and what the repair fixed |
+
+   The report header names the installed billet's version and the Berth version it ships.
+
+   **Deferred (2026-09-29): the two compose-reading scans leave this cycle,** to be reinstated
+   when they have something to find:
+
+   - *Deprecated variable names interpolated in compose* (`warn: DEVBOX_AUTHORIZED_KEYS
+     interpolated at <file>:<line>`). No `DEVBOX_*` name is interpolated in any consumer's
+     `main`, so the scan has nothing to find. Reinstate it at the next variable deprecation.
+   - *Named volume mounted under `$HOME` with no `volumes:` declaration* (a `docker compose
+     config` preflight). It would only move Compose's own immediate, named error earlier, and it
+     needs `docker compose config`. Reinstate it if an undeclared volume ever reaches a `start`.
+
+   The Berth-readiness row is removed (2026-09-29): the readiness marker is dropped (see
+   Consequences).
 
    Every scanner carries a **vacuity guard**: a regex or parser that matched nothing across the
    whole registry fails the scanner's own test, so a rotted pattern cannot pass forever
    (`test_every_billet_owned_variable_uses_the_billet_prefix` in `test_env_var_naming.py` is
    the precedent).
 
-3. **What it may read that billet could not before.** The consumer's compose files, opened as
-   text, for the two scans above. This is the ADR-0002 §1 amendment. It is granted to `doctor`
-   only: `start` and `connect` continue to read five fields of one file. It is a read of a
-   *definition* (ADR-0014 item 1) and stays a read; `doctor` writes nothing anywhere.
+3. **What it may read that billet could not before** (amended 2026-09-29). The four Berth files
+   a consumer copied whole into `.devcontainer/` (`dev-entrypoint.sh`, `sshd.conf`,
+   `authorized_keys-stub`, `berth.version`), read with `cat` from the Host checkout. **This
+   grant is in effect.** Opening the consumer's compose files as text stays **proposed, not in
+   effect**: no check in this cycle opens one, and a grant nothing exercises reintroduces the
+   drift between ADR text and code (ADR-0014 item 4). Both are the ADR-0002 §1 amendment, and
+   both are granted to `doctor` only: `start` and `connect` continue to read five fields of one
+   file. They are reads of a *definition* (ADR-0014 item 1) and stay reads; `doctor` writes
+   nothing anywhere.
 
 4. **What it must not do.** Parse a Dockerfile (a build recipe is not a contract surface and the
    image publishes what it needs to as labels or behavior). Validate recipe pairing (ADR-0014
-   item 5). Fail `start`. Repair anything: ADR-0013's entrypoint repairs; `doctor` reports what
+   item 5). Fail `start`. Exec into a container (added 2026-09-29): what the container knows,
+   `doctor` reads from its log. Repair anything: ADR-0013's entrypoint repairs; `doctor` reports what
    the repair could not fix (populated root-owned targets) and what it did fix (from the container
    log).
 
-5. **Where it lives in the architecture.** Unchanged layers, three additions at existing seams:
+5. **Where it lives in the architecture** (amended 2026-09-29). Unchanged layers, additions at
+   existing seams:
 
    ```
-   billet.cli            + `doctor` verb (renders; never mutates)
-   billet.workspace      + BerthPolicy engine — pure: directive hashes, version compare,
-                           deprecated-name scan; structurally like PortAllocator/HostPlacementPolicy
-   billet.access         ContainerAccess + read_mount_report() (owner/mode per mount, in-container)
-   billet.contracts      + BerthStatus, MountReport (frozen dataclasses)
+   billet.cli            + `doctor` verb and its renderer in _ui.py (renders; never mutates)
+   billet.workspace      + berth_policy engine — pure: normalize, directive_hash, compare_stamp,
+                           compare_file, the 20-line diff cap; imports only contracts
+                         + WorkspaceManager.doctor(): groups Workspaces by Host, one probe each
+   billet.access         + SshDoctorAccess — the DoctorAccess seam: one sectioned probe per Host
+                         + packaged_berth — the shipped Berth, through importlib.resources
+   billet.contracts      + DoctorAccess (Protocol); BerthStatus, BerthFileStatus, StampStatus,
+                           PackagedBerth, WorkspaceBerthRead, DoctorReport (frozen dataclasses);
+                           RuntimeReport in the next slice
    ```
+
+   `DoctorAccess` is its own seam rather than a method on `ContainerAccess`: it has one caller
+   and a different session shape (one probe per Host, not a call per Workspace). An import-linter
+   contract forbids `billet.workspace.engine` from importing `access`, `host`, `infrastructure`,
+   `cli` or the manager, so the engine does no I/O by construction.
 
    `read_image_lockers()` from the research is **not** added: after ADR-0013 the shared image
    publishes no Locker set, so there is no label to read. A Berth-version label is a matter for
@@ -95,10 +136,15 @@ Warn, never fail. No Dockerfile parsing.**
   PR #70's "can the window close?" would have been one `doctor` run.
 - billet learns to open compose files. That is a real widening of ADR-0002 §1 and is why this is
   an ADR and not a feature ticket. It is granted deliberately, to one verb, read-only.
+  *2026-09-29:* the first cycle opens no compose file, so that grant stays proposed; what is in
+  effect is the read of the four copied Berth files (item 3).
 - The stamp ADR-0012 ships in 0.4.0 is inert until this lands. That is intended: the alternative,
   an integer comparison in `start`, produces the byte-vs-directive false positive.
+  *2026-09-29:* `doctor` now reads it, beside the directive hash, never instead of it.
 - The Berth readiness marker, deferred from ADR-0013, has a home: a later Berth revision writes
   it after the repair block, `doctor` reads it, and `start` still never waits on it.
+  *Dropped 2026-09-29:* the race it guarded is closed by writer-ensures-target (ADR-0013 item 6),
+  `start` never waits, and `doctor` runs long after readiness. No Berth revision writes a marker.
 - `connect` is untouched. Any change that adds work to `connect` is out of scope for this ADR
   by construction.
 
@@ -107,7 +153,12 @@ Warn, never fail. No Dockerfile parsing.**
 - **Check in `start` instead** (the research's "CONFORM step" appended to the piped script).
   Deferred, not rejected: the wire cost is zero but the read verbs and the report renderer would
   ship with nothing to render them until `doctor` exists. When `doctor` lands, `start` may reuse
-  `read_mount_report()` to print the same warnings; that is a one-line follow-up, not a decision.
+  its read verb to print the same warnings; that is a one-line follow-up, not a decision.
+  *Deferred again 2026-09-29:* no drift has bitten `start` since 2026-09-14, and the follow-up
+  reuses a read verb that lands with the runtime-report slice.
+- **Fetch billet's side of the comparison from GitHub `main` at run time.** Rejected
+  (2026-09-29): a network dependency, and it disagrees with the billet actually installed.
+  A local billet-checkout config key was rejected too: registry surface for one verb.
 - **Consumer-side CI only** (`check-image-pin.sh` extended with a Berth stamp check). Kept as a
   complement, added to genshift-brand in this cycle, but it sees one consumer at a time and
   cannot see inside a running container.

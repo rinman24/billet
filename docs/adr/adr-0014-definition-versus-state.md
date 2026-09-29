@@ -9,7 +9,8 @@ writes [ADR-0006](adr-0006-claude-token-injection.md) already performs and the r
 [ADR-0013](adr-0013-mountpoint-ownership-repaired-at-mount-time.md) adds are inside a stated
 rule rather than exceptions to an unstated one. Grants **no new read**: reading the consumer's
 compose files is proposed in [ADR-0015](adr-0015-billet-doctor.md) and takes effect when
-`doctor` lands.
+`doctor` lands. *Amended (2026-09-29):* `doctor`'s read of the copied Berth files is in effect;
+the compose-file read is not (item 4).
 
 ## Context
 
@@ -77,6 +78,12 @@ Docker, Compose or the devcontainer tooling reads to build the image or create t
    and is proposed in ADR-0015 for `doctor` alone, warn-only, with Dockerfile parsing forbidden.
    Until that ADR's code lands, the grant is not in effect. Granting a read that nothing
    exercises would reintroduce the drift between ADR text and code that this ADR exists to end.
+
+   *Note (2026-09-29).* From this release `doctor` reads the four Berth files a consumer copied
+   whole (`dev-entrypoint.sh`, `sshd.conf`, `authorized_keys-stub`, `berth.version`) from the
+   Host checkout, with `cat`; that grant is in effect. The compose-file read is still **not** in
+   effect: no `doctor` check opens a compose file yet, so by this item's own rule it stays
+   proposed.
 
 5. **ADR-0011's conclusion holds; its reasoning is restated.** billet still does not validate
    recipe pairing at `start`. The reason is no longer ownership ("billet may not read repo
