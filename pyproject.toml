@@ -48,8 +48,23 @@ path = "src/billet/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/billet"]
 
+# The Berth ships inside the wheel so `billet doctor` compares a Workspace against the
+# templates of the billet actually installed, read through importlib.resources and never
+# through a repo path (ADR-0015, D-A4-1). hatchling's editable install does NOT expose a
+# force-included directory to `import billet` (the package resolves to src/billet, which has
+# no _berth), so tests prove the resolver against a built wheel (tests/unit/test_packaging.py).
+[tool.hatch.build.targets.wheel.force-include]
+"templates/workspace" = "billet/_berth"
+
 [tool.hatch.build.targets.sdist]
-include = ["src/billet", "tests", "README.md", "CLAUDE.md", "LICENSE"]
+include = [
+    "src/billet",
+    "templates/workspace",
+    "tests",
+    "README.md",
+    "CLAUDE.md",
+    "LICENSE",
+]
 
 [dependency-groups]
 docs = [
