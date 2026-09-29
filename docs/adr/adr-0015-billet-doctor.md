@@ -46,7 +46,8 @@ is a capability nothing exercises.
 
 **billet gains a `doctor` verb that renders a report over the registry and never mutates. It
 computes Berth drift by directive hash against the Berth the installed billet ships and reports
-each running Workspace's runtime state and Locker ownership from the entrypoint's own log. Warn, never fail. No Dockerfile parsing.**
+each running Workspace's runtime state and Locker ownership from the entrypoint's own log. Warn,
+never fail. No Dockerfile parsing.**
 
 1. **Shape** (rewritten 2026-09-29). `billet doctor [--host <name>] [--workspace <name>]`. Every
    check goes through the Host: `repo_dir` is a Host path, relative to the admin user's home,
@@ -77,7 +78,7 @@ each running Workspace's runtime state and Locker ownership from the entrypoint'
    | Check | Source | Report |
    |---|---|---|
    | Berth version stamp and Berth-file drift | `.devcontainer/` in the Host checkout; billet's side is the installed package's own copy of `templates/workspace/` (force-included into the wheel, read through `importlib.resources`, never a repo path) | the stamp: `ok`, or a `warn` reading `behind by N`, `ahead (upgrade billet)` for a consumer newer than a stale install, or `unknown` when `berth.version` is missing. Then per copied file (`dev-entrypoint.sh`, `sshd.conf`, `authorized_keys-stub`): `ok`; `warn: <file> missing` when the file is absent; or `warn: <file> directive drift (N lines)` followed by a unified diff of the *normalized* lines, capped at 20 lines with `… (M more)`. The **directive hash** is ADR-0012 item 5 with its 2026-09-29 clarification: fold continuations, strip each line, drop blank lines, drop lines starting `#`. The two merged snippets (`Dockerfile.snippet`, `docker-compose.snippet.yml`) are not checked, and the report says so in one line: a snippet-subset check would false-positive on everything ADR-0003 grandfathered |
-   | Runtime and Locker ownership (in effect 2026-09-29) | the entrypoint's own log (`docker logs` of the service's running container): its `berth=N` line and the ADR-0013 repair lines. Only the current run counts: a restarted container keeps its log, so the report reads from the last `berth=` line on. `doctor` never execs into a container | the running Berth against the checkout's stamp: `ok: running berth=N`, or a `warn` reading `running berth=N, checkout stamp M` (also for `berth=unknown` or a missing stamp) or `running berth not logged`. Each `repaired` line: `ok (repaired at start): <path> (was <owner>:<group> <mode>)`. Each `warning:` or `WARNING:` line: `warn:` and the entrypoint's own text, such as `warn: <path> owned by uid <n>; not repaired`. Other entrypoint lines (`created …`, `skipping …`) are informational and not printed. A stopped container: `skipped: not running`. *Accepted limitation:* ownership that changes after start is not seen; nothing in the fleet does that |
+   | Runtime and Locker ownership (in effect 2026-09-29) | the entrypoint's own log (`docker logs` of the service's running container): its `berth=N` line and the ADR-0013 repair lines. Only the current run counts: a restarted container keeps its log, so the report reads from the last `berth=` line on. `doctor` never execs into a container | the running Berth against the checkout's stamp: `ok: running berth=N`, or a `warn` reading `running berth=N, checkout stamp M` (also for `berth=unknown` or a missing stamp) or `running berth not logged`. Each `repaired` line: `ok (repaired at start): <path> (was <owner>:<group> <mode>)`. Each `warning:` or `WARNING:` line: `warn:` and the entrypoint's own text, such as `warn: <path> owned by uid <n>; not repaired`. Other entrypoint lines (`created …`, `skipping …`) are informational and not printed. A stopped container: `skipped: not running`. A Workspace whose `devcontainer.json` cannot be read or parsed, or whose `docker compose ps` or `docker logs` fails: `skipped: runtime unreadable (<reason>)`. *Accepted limitation:* ownership that changes after start is not seen; nothing in the fleet does that |
 
    The report header names the installed billet's version and the Berth version it ships.
 
@@ -104,13 +105,14 @@ each running Workspace's runtime state and Locker ownership from the entrypoint'
    `authorized_keys-stub`, `berth.version`), read with `cat` from the Host checkout. **This
    grant is in effect.** Opening the consumer's compose files as text stays **proposed, not in
    effect**: no check in this cycle opens one, and a grant nothing exercises reintroduces the
-   drift between ADR text and code (ADR-0014 item 4). The runtime report does not change this.
-   It reads `devcontainer.json`, the file `start` and `connect` already read, and passes the
-   compose files it names to `docker compose ps` *by name*, as `start` passes them to
-   `docker compose up`. Compose reads those files; `doctor` does not. Both are the ADR-0002 §1 amendment, and
-   both are granted to `doctor` only: `start` and `connect` continue to read five fields of one
-   file. They are reads of a *definition* (ADR-0014 item 1) and stay reads; `doctor` writes
-   nothing anywhere.
+   drift between ADR text and code (ADR-0014 item 4). These two grants, the Berth-file read and
+   the compose-file read, are the ADR-0002 §1 amendment, and both are granted to `doctor` only:
+   `start` and `connect` continue to read five fields of one file. They are reads of a
+   *definition* (ADR-0014 item 1) and stay reads; `doctor` writes nothing anywhere. The runtime
+   report does not change either grant. It reads `devcontainer.json`, the file `start` and
+   `connect` already read, and passes the compose files it names to `docker compose ps` *by
+   name*, as `start` passes them to `docker compose up`. Compose reads those files; `doctor`
+   does not.
 
 4. **What it must not do.** Parse a Dockerfile (a build recipe is not a contract surface and the
    image publishes what it needs to as labels or behavior). Validate recipe pairing (ADR-0014
