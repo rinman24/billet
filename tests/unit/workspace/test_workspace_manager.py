@@ -2,8 +2,12 @@
 
 import pytest
 
+from billet.access.doctor.ssh_doctor_access import SshDoctorAccess
 from billet.contracts import (
+    BerthFileState,
     DevcontainerFacts,
+    DoctorFilters,
+    DoctorSkip,
     RemoteHost,
     SshConfigBlock,
     WorkspaceSpec,
@@ -13,10 +17,14 @@ from billet.shared.errors import ConfigError, HostOperationError
 from billet.workspace.manager.workspace_manager import WorkspaceManager
 from tests.unit._fakes import (
     FakeContainerAccess,
+    FakeDoctorAccess,
+    FakeProcessRunner,
     FakeSourceAccess,
     FakeSshConfigAccess,
     RecordingPlanObserver,
+    completed,
     make_devcontainer_facts,
+    make_packaged_berth,
     make_remote_host,
     make_workspace_spec,
 )
@@ -35,7 +43,7 @@ def _manager(
     src = source or FakeSourceAccess()
     cont = container or FakeContainerAccess()
     cfg = ssh_config or FakeSshConfigAccess()
-    return WorkspaceManager(src, cont, cfg), src, cont, cfg
+    return WorkspaceManager(src, cont, cfg, FakeDoctorAccess()), src, cont, cfg
 
 
 # --- register ----------------------------------------------------------------------
@@ -338,3 +346,82 @@ def test_install_ssh_config_writes_conf_and_ensures_include() -> None:
     assert cfg.written is not None
     assert "Host gswa-container" in cfg.written
     assert cfg.include_calls == 1
+
+
+# --- doctor ------------------------------------------------------------------------
+
+DEVBOX = make_remote_host(ip="gswa-devbox")
+OTHER = make_remote_host(ip="other-box")
+BILLET_WS = make_workspace_spec(key="billet", repo_dir="billet", container_ssh_port=2223)
+SQUADRA_WS = make_workspace_spec(key="squadra", host="other", repo_dir="squadra")
+DOCTOR_ITEMS = [(SPEC, DEVBOX), (SQUADRA_WS, OTHER), (BILLET_WS, DEVBOX)]
+
+
+def _doctor_manager(doctor: FakeDoctorAccess) -> WorkspaceManager:
+    return WorkspaceManager(
+        FakeSourceAccess(), FakeContainerAccess(), FakeSshConfigAccess(), doctor
+    )
+
+
+def test_doctor_probes_each_host_once_with_all_its_workspaces() -> None:
+    doctor = FakeDoctorAccess()
+    report = _doctor_manager(doctor).doctor(DOCTOR_ITEMS, make_packaged_berth(), DoctorFilters())
+    assert doctor.calls == [
+        ("gswa-devbox", ("gswa-backend", "billet")),
+        ("other-box", ("squadra",)),
+    ]
+    assert [(s.host, s.workspace) for s in report.statuses] == [
+        ("devbox", "gswa-backend"),
+        ("devbox", "billet"),
+        ("other", "squadra"),
+    ]
+    assert report.skipped == ()
+    assert report.berth_version == make_packaged_berth().version
+
+
+def test_doctor_reports_drift_per_workspace() -> None:
+    doctor = FakeDoctorAccess(overrides={"billet": {"sshd.conf": "Port 2200\n"}})
+    report = _doctor_manager(doctor).doctor(
+        [(SPEC, DEVBOX), (BILLET_WS, DEVBOX)], make_packaged_berth(), DoctorFilters()
+    )
+    states = {s.workspace: {f.file: f.state for f in s.files} for s in report.statuses}
+    assert states["gswa-backend"]["sshd.conf"] is BerthFileState.OK
+    assert states["billet"]["sshd.conf"] is BerthFileState.DRIFT
+
+
+def test_doctor_filters_by_host_and_workspace() -> None:
+    doctor = FakeDoctorAccess()
+    manager = _doctor_manager(doctor)
+    by_host = manager.doctor(DOCTOR_ITEMS, make_packaged_berth(), DoctorFilters(host="other"))
+    assert [s.workspace for s in by_host.statuses] == ["squadra"]
+    by_ws = manager.doctor(DOCTOR_ITEMS, make_packaged_berth(), DoctorFilters(workspace="billet"))
+    assert [s.workspace for s in by_ws.statuses] == ["billet"]
+    assert doctor.calls[-1] == ("gswa-devbox", ("billet",))
+
+
+def test_doctor_skips_an_unreachable_host_and_reads_the_rest() -> None:
+    doctor = FakeDoctorAccess(unreachable=["gswa-devbox"], failing=[])
+    report = _doctor_manager(doctor).doctor(DOCTOR_ITEMS, make_packaged_berth(), DoctorFilters())
+    assert report.skipped == (
+        DoctorSkip(host="devbox", reason="unreachable", workspaces=("gswa-backend", "billet")),
+    )
+    assert [s.workspace for s in report.statuses] == ["squadra"]
+
+
+def test_doctor_skips_a_host_whose_probe_fails_with_the_reason() -> None:
+    doctor = FakeDoctorAccess(failing=["other-box"])
+    report = _doctor_manager(doctor).doctor(DOCTOR_ITEMS, make_packaged_berth(), DoctorFilters())
+    (skip,) = report.skipped
+    assert skip.host == "other"
+    assert skip.reason.startswith("probe failed: command failed (exit 1)")
+
+
+def test_doctor_over_the_real_access_makes_exactly_one_ssh_call_per_host() -> None:
+    runner = FakeProcessRunner(lambda _argv: completed(stdout=""))
+    manager = WorkspaceManager(
+        FakeSourceAccess(), FakeContainerAccess(), FakeSshConfigAccess(), SshDoctorAccess(runner)
+    )
+    report = manager.doctor(DOCTOR_ITEMS, make_packaged_berth(), DoctorFilters())
+    assert len(runner.calls) == 2
+    assert [call[-2] for call in runner.calls] == ["azureuser@gswa-devbox", "azureuser@other-box"]
+    assert len(report.statuses) == 3

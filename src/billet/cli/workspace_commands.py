@@ -1,4 +1,4 @@
-"""Top-level ``billet`` Workspace commands: add / ls / start / stop / connect / ssh-config / rm.
+"""Top-level ``billet`` Workspace commands: add, ls, doctor, start, stop, connect, ssh-config, rm.
 
 The composition root for the Workspace subsystem: it constructs the concrete access
 implementations (over ``SubprocessRunner``) and injects them into :class:`WorkspaceManager`,
@@ -17,7 +17,10 @@ from typing import Annotated, NoReturn, Protocol
 
 import typer
 
+from billet import __version__
 from billet.access.container.compose_container_access import ComposeContainerAccess
+from billet.access.doctor.packaged_berth import read_packaged_berth
+from billet.access.doctor.ssh_doctor_access import SshDoctorAccess
 from billet.access.host.azure_vm_provider import AzureVmHostProvider
 from billet.access.registry.toml_registry_access import RegistryAccess
 from billet.access.secret.claude_token_access import ClaudeTokenAccess
@@ -25,9 +28,11 @@ from billet.access.source.git_source_access import GitSourceAccess
 from billet.access.sshconfig.file_ssh_config_access import FileSshConfigAccess
 from billet.cli import _planio, _ui
 from billet.contracts import (
+    DoctorFilters,
     HostProvider,
     HostSpec,
     HostStatus,
+    PackagedBerth,
     RemoteHost,
     SshConfigBlock,
     WorkspaceSpec,
@@ -40,6 +45,7 @@ from billet.workspace.manager.workspace_manager import WorkspaceManager
 
 ProviderFactory = Callable[[str], HostProvider]
 ClaudeTokenAccessFactory = Callable[[], ClaudeTokenAccess]
+PackagedBerthReader = Callable[[], PackagedBerth]
 
 
 class WorkspaceManagerFactory(Protocol):
@@ -76,6 +82,7 @@ def _default_workspace_manager_factory(on_line: OnLine | None = None) -> Workspa
         GitSourceAccess(runner),
         ComposeContainerAccess(runner, on_compose_line=on_line),
         FileSshConfigAccess(),
+        SshDoctorAccess(runner),
     )
 
 
@@ -87,6 +94,8 @@ def _default_claude_token_access() -> ClaudeTokenAccess:
 provider_factory: ProviderFactory = _default_provider_factory
 workspace_manager_factory: WorkspaceManagerFactory = _default_workspace_manager_factory
 claude_token_access_factory: ClaudeTokenAccessFactory = _default_claude_token_access
+# The Berth the *installed* billet ships (ADR-0015, D-A4-1); tests substitute a fixed one.
+packaged_berth_reader: PackagedBerthReader = read_packaged_berth
 
 
 def _execvp(argv: list[str]) -> NoReturn:
@@ -247,6 +256,62 @@ def _ls_group(
         manages_workspaces=host.manages_workspaces,
         rows=rows,
     )
+
+
+# --- doctor ------------------------------------------------------------------------
+
+_HostFilterOption = Annotated[
+    str | None, typer.Option("--host", help="report only the workspaces on this host.")
+]
+_WorkspaceFilterOption = Annotated[
+    str | None, typer.Option("--workspace", help="report only this workspace.")
+]
+
+
+def doctor(
+    config: _ConfigOption = None,
+    host: _HostFilterOption = None,
+    workspace: _WorkspaceFilterOption = None,
+) -> None:
+    """Report each Workspace's Berth drift against the Berth this billet ships.
+
+    Read-only, over one SSH session per Host (ADR-0015): each Workspace's Host checkout
+    shows its short HEAD, its ``berth.version`` stamp, and whether ``dev-entrypoint.sh``,
+    ``sshd.conf`` and ``authorized_keys-stub`` agree with billet's copies by directive hash.
+    ``--host`` / ``--workspace`` filter the report. An unreachable Host is reported skipped
+    and is never started. Warn, never fail: the exit status is 0 whatever the report says.
+    """
+    try:
+        registry = _registry(config)
+        if host is not None:
+            registry.host(host)  # an unknown filter is a config error, not an empty report
+        if workspace is not None:
+            registry.workspace(workspace)
+        berth = packaged_berth_reader()
+        workspaces = [registry.workspace(k) for k in registry.workspace_keys()]
+        if not workspaces:
+            _ui.empty_state(
+                (
+                    "no workspaces yet.",
+                    "declare [workspaces.<key>] in config.toml,",
+                    "then billet add <key>",
+                )
+            )
+            return
+        # A query, like ls (ADR-0004 §2): only managing Hosts carry Workspaces to read. The
+        # Host is reached through its ssh-config alias, so doctor makes no `az` call at all
+        # and cannot start or allocate a VM (D-A4-9).
+        items = [
+            (ws, _remote_via_alias(registry.host(ws.host), ws))
+            for ws in workspaces
+            if registry.host(ws.host).manages_workspaces
+        ]
+        manager = workspace_manager_factory()
+        with _ui.planning_status(text="reading berths"):
+            report = manager.doctor(items, berth, DoctorFilters(host=host, workspace=workspace))
+        _ui.render_doctor(report, __version__)
+    except BilletError as exc:
+        _planio.fail(exc)
 
 
 # --- start -------------------------------------------------------------------------
@@ -506,6 +571,7 @@ def register(app: typer.Typer) -> None:
     panel = "workspace · devcontainers on a host"
     app.command(name="add", rich_help_panel=panel)(add)
     app.command(name="ls", rich_help_panel=panel)(ls)
+    app.command(name="doctor", rich_help_panel=panel)(doctor)
     app.command(name="start", rich_help_panel=panel)(start)
     app.command(name="stop", rich_help_panel=panel)(stop)
     app.command(name="connect", rich_help_panel=panel)(connect)

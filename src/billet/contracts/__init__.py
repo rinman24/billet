@@ -5,6 +5,23 @@ See ADR-0001 for why the contracts live here rather than beside their subsystems
 """
 
 from billet.contracts.config import GlobalConfig
+from billet.contracts.doctor import (
+    BERTH_COPIED_FILES,
+    BERTH_HASHED_FILES,
+    BERTH_UNCHECKED_SNIPPETS,
+    BERTH_VERSION_FILE,
+    BerthFileState,
+    BerthFileStatus,
+    BerthStatus,
+    DoctorAccess,
+    DoctorFilters,
+    DoctorReport,
+    DoctorSkip,
+    PackagedBerth,
+    StampState,
+    StampStatus,
+    WorkspaceBerthRead,
+)
 from billet.contracts.host import (
     HostPowerState,
     HostProvider,
@@ -36,11 +53,22 @@ from billet.contracts.workspace import (
 )
 
 __all__ = [
+    "BERTH_COPIED_FILES",
+    "BERTH_HASHED_FILES",
+    "BERTH_UNCHECKED_SNIPPETS",
+    "BERTH_VERSION_FILE",
+    "BerthFileState",
+    "BerthFileStatus",
+    "BerthStatus",
     "ContainerAccess",
     "ContainerMetrics",
     "CpuMetrics",
     "DevcontainerFacts",
     "DiskMetrics",
+    "DoctorAccess",
+    "DoctorFilters",
+    "DoctorReport",
+    "DoctorSkip",
     "GlobalConfig",
     "HostMetrics",
     "HostPowerState",
@@ -50,6 +78,7 @@ __all__ = [
     "MemoryMetrics",
     "MetricsAccess",
     "NullPlanObserver",
+    "PackagedBerth",
     "Plan",
     "PlanObserver",
     "PlanStep",
@@ -58,10 +87,13 @@ __all__ = [
     "SourceAccess",
     "SshConfigAccess",
     "SshConfigBlock",
+    "StampState",
+    "StampStatus",
     "StepKind",
     "WorkspacePlan",
     "WorkspacePlanStep",
     "WorkspaceSpec",
+    "WorkspaceBerthRead",
     "WorkspaceStatus",
     "WorkspaceStepKind",
 ]

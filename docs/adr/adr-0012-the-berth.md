@@ -8,6 +8,8 @@ Accepted (2026-09-14). Names the runtime surface billet has published since
 `.devcontainer/`, and billet still reads five fields out of one file. The directive-hash
 comparison this ADR defines is implemented by `billet doctor`
 ([ADR-0015](adr-0015-billet-doctor.md)); this cycle ships the stamp, not the comparison.
+*Amended (2026-09-29):* `doctor` now implements it, and item 5 carries a dated clarification of
+the normalization.
 
 ## Context
 
@@ -84,7 +86,23 @@ to `.devcontainer/berth.version`. The entrypoint prints the version it was copie
    if they agree after comment lines are dropped and line continuations are folded, and differ
    otherwise. Byte equality is the wrong test: all four `sshd.conf` copies in the fleet differ
    in header comments and agree in every directive. This definition is what `doctor` will
-   compute (ADR-0015); nothing in this cycle compares hashes.
+   compute (ADR-0015); nothing in this cycle compares hashes. *(As of 2026-09-14. From
+   2026-09-29 `doctor` computes it, with the normalization clarified below.)*
+
+   *Clarification (2026-09-29).* As written, this item ("comment lines dropped, continuations
+   folded") does not ignore whitespace, while item 2 says whitespace-only changes do not bump
+   the Berth. The normalization `doctor` implements is therefore, in this order:
+
+   1. fold backslash line continuations;
+   2. strip leading and trailing whitespace from every line;
+   3. drop blank lines;
+   4. drop lines whose first character is `#`, including the shebang.
+
+   A trailing `# …` after code is kept, because splitting it off would mean parsing shell. The
+   directive hash is SHA-256 of the normalized lines joined with `\n`. A continuation is folded
+   by joining the next line with a single space, so re-indenting a continued line is itself a
+   whitespace-only change. `authorized_keys-stub` normalizes to nothing, so any two stubs
+   compare equal.
 
 6. **The entrypoint reports the stamp it shipped with.** `dev-entrypoint.sh` reads the sibling
    `berth.version` and prints `dev-entrypoint: berth=N` (or `berth=unknown` if the file is

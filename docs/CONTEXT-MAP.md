@@ -72,32 +72,40 @@ with nothing to repair it.
 
 ## Open questions
 
-Deferred on 2026-09-14, in the order they are likely to be taken up. None is decided; each
-needs its own ADR or an amendment before code.
+Deferred on 2026-09-14, in the order they are likely to be taken up. Each needs its own ADR or
+an amendment before code. Updated 2026-09-29: questions 2 and 6 are closed, 4 is partly
+implemented, and 5 is deferred again.
 
 1. **`gh_token_cmd` (N4).** Deliver `GH_TOKEN` the way [ADR-0006](adr/adr-0006-claude-token-injection.md)
    delivers the Claude token, which would remove the `gh` Locker entirely. Needs an ADR-0011
    amendment distinguishing *reading a credential store* (which billet never does) from
    *delivering an operator-supplied token*; the token must not travel through the
    world-readable `/etc/environment`.
-2. **Lifecycle hooks.** billet honours `postCreateCommand` only. `postStartCommand` is the
-   spec-correct home for the `chezmoi` step billet runs today as the operator-global
-   `personal_bootstrap_cmd`; `onCreateCommand`, `updateContentCommand`, `postStartCommand` and
-   `postAttachCommand` are unread. Widening the facts contract is a change to ADR-0002 §1.
+2. **Lifecycle hooks.** *Closed (2026-09-29).* billet runs `postCreateCommand` and the
+   operator-global `personal_bootstrap_cmd` on every `start`, which already covers what
+   `postStartCommand` would, and adopts no further lifecycle keys (`onCreateCommand`,
+   `updateContentCommand`, `postStartCommand`, `postAttachCommand` stay unread). ADR-0002 §1 is
+   unchanged (A2 dropped, 2026-09-29).
 3. **Berth baked into the shared image (ADR-0016).** The entrypoint, `sshd.conf` and stub live
    in the image and the consumer's compose points at them (`entrypoint:
    ${BILLET_ENTRYPOINT:-…}`), with a Berth-version OCI label. Precondition: the shared image's
    ADR record states that Docker, not billet, reads those files from the repo (its ADR-0001
    says billet reads them; its ADR-0002, planned for the 2.0.0 release, corrects that). Must not
    break Separate Ways: a non-GenShift consumer keeps copying files.
-4. **`doctor` implementation** ([ADR-0015](adr/adr-0015-billet-doctor.md), decided, deferred).
-   The `BerthPolicy` engine, `read_mount_report()`, the `BerthStatus`/`MountReport` contracts
-   and the compose-file read that ADR-0002 §1 grants to `doctor` alone.
+4. **`doctor` implementation** ([ADR-0015](adr/adr-0015-billet-doctor.md)). *Berth drift
+   implemented (2026-09-29):* the pure `berth_policy` engine, the `DoctorAccess` seam (one
+   sectioned SSH probe per Host) and the `BerthStatus`/`BerthFileStatus` contracts. The runtime
+   report (`docker compose ps` and the entrypoint's log, including Locker ownership) is the next
+   slice. The compose-file read ADR-0002 §1 would grant to `doctor` stays proposed: no check
+   opens a compose file yet.
 5. **Start-time CONFORM readback and compose preflight.** Neither a `stat` of Locker ownership
    appended to the `start` script nor a `docker compose config -q` preflight for undeclared
    volumes ships in 0.4.0. Both are `doctor` checks first; `start` may reuse the read verb
-   afterwards.
-6. **Readiness marker.** A later Berth revision may write a marker after its repair block so
-   `doctor` can report readiness. `start` never waits on it: a consumer on an older Berth would
-   never signal, and the writer-ensures-target rule of ADR-0013 item 6 holds on every revision
-   without one.
+   afterwards. *Deferred again (2026-09-29):* nothing has bitten since 2026-09-14, and the
+   readback would reuse the read verb of `doctor`'s runtime-report slice. The compose scans left
+   `doctor` too (ADR-0015 item 2): the deprecated-name scan returns at the next variable
+   deprecation, the undeclared-volume preflight if an undeclared volume ever reaches a `start`.
+6. **Readiness marker.** *Closed (2026-09-29): dropped.* The race it guarded is closed by the
+   writer-ensures-target rule of ADR-0013 item 6, which holds on every Berth revision; `start`
+   never waits; and `doctor` runs long after readiness, so a marker would report nothing a
+   human needs.

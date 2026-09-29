@@ -15,6 +15,11 @@ definition/state boundary. [ADR-0015](adr-0015-billet-doctor.md) **proposes** wi
 in effect: nothing in billet opens a compose file, and the amendment takes effect only when
 `doctor` lands (ADR-0014 item 4).
 
+Amended (2026-09-29): `doctor` has landed for the Berth-file checks. Its read of the four Berth
+files a consumer copied into `.devcontainer/` (`cat` from the Host checkout) is in effect from
+this release. The compose-file read is still not in effect: no `doctor` check opens a compose
+file yet.
+
 ## Context
 
 The Host subsystem (ADR-0001) makes a cloud VM exist, reachable, and adopted. The Workspace

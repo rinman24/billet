@@ -1,1 +1,1 @@
-"""ResourceAccess layer: the Azure VM provider, registry, ssh-config, container, source."""
+"""ResourceAccess layer: Azure VM provider, registry, ssh-config, container, source, doctor."""

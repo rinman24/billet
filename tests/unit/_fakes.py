@@ -1,10 +1,12 @@
 """Shared in-memory fakes and spec factories for billet unit tests."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from billet.contracts import (
+    BERTH_COPIED_FILES,
     ContainerMetrics,
     CpuMetrics,
     DevcontainerFacts,
@@ -14,9 +16,11 @@ from billet.contracts import (
     HostSpec,
     HostStatus,
     MemoryMetrics,
+    PackagedBerth,
     PlanStep,
     ProvisioningSpec,
     RemoteHost,
+    WorkspaceBerthRead,
     WorkspacePlanStep,
     WorkspaceSpec,
 )
@@ -340,3 +344,61 @@ class FakeSshConfigAccess:
 
     def ensure_include(self) -> None:
         self.include_calls += 1
+
+
+# --- doctor ----------------------------------------------------------------------------
+
+#: billet's own templates, used as *test fixtures* for the shipped Berth. Product code
+#: never reads this path; it resolves the packaged copy (tests/unit/test_packaging.py).
+TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates" / "workspace"
+
+
+def make_packaged_berth(version: int | None = None) -> PackagedBerth:
+    """Return the repo's templates as a PackagedBerth (optionally with another version)."""
+    files = {name: (TEMPLATE_DIR / name).read_text() for name in BERTH_COPIED_FILES}
+    shipped = int(files["berth.version"].strip()) if version is None else version
+    return PackagedBerth(version=shipped, files=files)
+
+
+def make_berth_read(
+    key: str = "gswa-backend",
+    head: str | None = "d223cd5",
+    overrides: Mapping[str, str | None] | None = None,
+) -> WorkspaceBerthRead:
+    """Return a read whose files equal the shipped templates, with ``overrides`` applied."""
+    files: dict[str, str | None] = dict(make_packaged_berth().files)
+    files.update(overrides or {})
+    return WorkspaceBerthRead(workspace=key, head=head, files=files)
+
+
+class FakeDoctorAccess:
+    """A DoctorAccess that records each probed Host and returns scripted reads.
+
+    ``unreachable`` / ``failing`` name Host *ips* whose probe raises the way the real access
+    does (``HostOperationError`` for an SSH transport failure, ``ProcessError`` otherwise).
+    ``overrides`` maps a Workspace key to the file overrides its read carries.
+    """
+
+    def __init__(
+        self,
+        *,
+        unreachable: Sequence[str] = (),
+        failing: Sequence[str] = (),
+        overrides: Mapping[str, Mapping[str, str | None]] | None = None,
+    ) -> None:
+        self._unreachable = frozenset(unreachable)
+        self._failing = frozenset(failing)
+        self._overrides = overrides or {}
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def read_berths(
+        self, remote: RemoteHost, specs: Sequence[WorkspaceSpec]
+    ) -> tuple[WorkspaceBerthRead, ...]:
+        self.calls.append((remote.ip, tuple(spec.key for spec in specs)))
+        if remote.ip in self._unreachable:
+            raise HostOperationError(f"could not reach {remote.ip} over SSH")
+        if remote.ip in self._failing:
+            raise ProcessError(["ssh", remote.ip, "bash -se"], 1, "bash: boom")
+        return tuple(
+            make_berth_read(spec.key, overrides=self._overrides.get(spec.key)) for spec in specs
+        )

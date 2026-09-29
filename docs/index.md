@@ -49,13 +49,14 @@ named-volume mount targets at container start instead of relying on the image to
 them ([ADR-0013](adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)). What billet
 may write into a container it started, and what it never writes — anything a build reads — is
 the definition/state boundary of [ADR-0014](adr/adr-0014-definition-versus-state.md). The
-`doctor` verb that will compute Berth drift and Locker ownership over the registry is decided,
-and deferred, in [ADR-0015](adr/adr-0015-billet-doctor.md).
+`doctor` verb reports each Workspace's Berth drift against the Berth the installed billet
+ships, over one SSH session per Host ([ADR-0015](adr/adr-0015-billet-doctor.md)); its runtime
+report (container state and the entrypoint's Locker-ownership log) is next.
 
 ## Status
 
 Both subsystems run in Python. The Host subsystem (`billet host up|stop|pin-ip|specs`) drives the
-VM; the Workspace subsystem (`billet add|ls|start|stop|connect|ssh-config|rm`) clones,
+VM; the Workspace subsystem (`billet add|ls|doctor|start|stop|connect|ssh-config|rm`) clones,
 builds, bootstraps, and connects a repo's devcontainer on a Host, reading each repo's
 `.devcontainer/devcontainer.json` as a read-only data contract. The Python tool now fully
 replaces the original shell scripts lifted from gswa-backend, which have been removed.
