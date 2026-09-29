@@ -86,7 +86,8 @@ to `.devcontainer/berth.version`. The entrypoint prints the version it was copie
    if they agree after comment lines are dropped and line continuations are folded, and differ
    otherwise. Byte equality is the wrong test: all four `sshd.conf` copies in the fleet differ
    in header comments and agree in every directive. This definition is what `doctor` will
-   compute (ADR-0015); nothing in this cycle compares hashes.
+   compute (ADR-0015); nothing in this cycle compares hashes. *(As of 2026-09-14. From
+   2026-09-29 `doctor` computes it, with the normalization clarified below.)*
 
    *Clarification (2026-09-29).* As written, this item ("comment lines dropped, continuations
    folded") does not ignore whitespace, while item 2 says whitespace-only changes do not bump

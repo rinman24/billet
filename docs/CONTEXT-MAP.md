@@ -85,7 +85,7 @@ implemented, and 5 is deferred again.
    operator-global `personal_bootstrap_cmd` on every `start`, which already covers what
    `postStartCommand` would, and adopts no further lifecycle keys (`onCreateCommand`,
    `updateContentCommand`, `postStartCommand`, `postAttachCommand` stay unread). ADR-0002 §1 is
-   unchanged.
+   unchanged (A2 dropped, 2026-09-29).
 3. **Berth baked into the shared image (ADR-0016).** The entrypoint, `sshd.conf` and stub live
    in the image and the consumer's compose points at them (`entrypoint:
    ${BILLET_ENTRYPOINT:-…}`), with a Berth-version OCI label. Precondition: the shared image's
