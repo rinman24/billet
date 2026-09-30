@@ -15,6 +15,14 @@ class ConfigError(BilletError):
     """The config.toml is missing, malformed, or fails validation."""
 
 
+class PackagedBerthMissing(ConfigError):
+    """The installed billet carries no packaged Berth (an editable checkout, not a wheel).
+
+    Its message already names the fix (``uv build``, then run from the wheel), so the CLI
+    renders the message alone, without the "edit it, then retry" a config error ends with.
+    """
+
+
 class AzLoginRequired(BilletError):
     """The Azure CLI has no usable control-plane token; the operator must ``az login``."""
 

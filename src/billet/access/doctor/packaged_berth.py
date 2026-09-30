@@ -6,15 +6,15 @@ actually installed and never against a repo path (ADR-0015, D-A4-1).
 
 hatchling's editable install (what ``uv run`` uses in a checkout) puts ``src/`` on the path
 and does not expose the force-included directory to ``import billet``: there the resource is
-absent and :func:`read_packaged_berth` raises a :class:`ConfigError` naming the fix. The
-packaging tests prove the resolver against a built wheel.
+absent and :func:`read_packaged_berth` raises :class:`PackagedBerthMissing`, whose message
+names the fix. The packaging tests prove the resolver against a built wheel.
 """
 
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 
 from billet.contracts import BERTH_COPIED_FILES, BERTH_VERSION_FILE, PackagedBerth
-from billet.shared.errors import ConfigError
+from billet.shared.errors import ConfigError, PackagedBerthMissing
 
 _PACKAGE = "billet"
 #: Where ``pyproject.toml`` force-includes ``templates/workspace/`` inside the package.
@@ -31,7 +31,7 @@ def read_packaged_berth() -> PackagedBerth:
     root = berth_resource_root()
     missing = [name for name in BERTH_COPIED_FILES if not root.joinpath(name).is_file()]
     if missing:
-        raise ConfigError(
+        raise PackagedBerthMissing(
             f"this billet install carries no packaged Berth ({_PACKAGE}/{BERTH_RESOURCE_DIR}: "
             f"missing {', '.join(missing)}).\n"
             "an editable checkout (`uv run`) does not ship the templates; run doctor from a "

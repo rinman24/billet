@@ -14,6 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from billet import __version__
+from billet.access.doctor import packaged_berth
 from billet.access.doctor.ssh_doctor_access import SshDoctorAccess
 from billet.cli import _ui, workspace_commands as wc
 from billet.cli.app import app
@@ -360,16 +361,35 @@ container_alias = "billet-container"
 
 
 def test_doctor_without_a_packaged_berth_fails_with_the_fix(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path, tmp_path: Path
+) -> None:
+    """D-A7-9: the message names `uv build` itself; no generic config-error trailer follows."""
+    _install(monkeypatch)
+    empty = tmp_path / "no-berth"
+    empty.mkdir()
+    # The real reader over an install with no packaged Berth (an editable checkout's shape).
+    monkeypatch.setattr(packaged_berth, "berth_resource_root", lambda: empty)
+    monkeypatch.setattr(wc, "packaged_berth_reader", packaged_berth.read_packaged_berth)
+    result = runner.invoke(app, ["doctor", "--config", str(config_file)])
+    assert result.exit_code == 1
+    lines = [line.strip() for line in result.output.splitlines() if line.strip()]
+    assert "this billet install carries no packaged Berth" in lines[-2]
+    assert lines[-1].endswith("`uv build`, then `uvx --from dist/<wheel> billet doctor`")
+    assert "edit it, then retry" not in result.output
+
+
+def test_other_config_errors_keep_the_edit_it_trailer(
     monkeypatch: pytest.MonkeyPatch, config_file: Path
 ) -> None:
     _install(monkeypatch)
 
-    def _absent() -> PackagedBerth:
-        raise ConfigError("this billet install carries no packaged Berth")
+    def _bad() -> PackagedBerth:
+        raise ConfigError("the packaged berth.version is not a positive integer: 'x'")
 
-    monkeypatch.setattr(wc, "packaged_berth_reader", _absent)
+    monkeypatch.setattr(wc, "packaged_berth_reader", _bad)
     result = runner.invoke(app, ["doctor", "--config", str(config_file)])
     assert result.exit_code == 1
+    assert result.output.rstrip().endswith("edit it, then retry")
 
 
 def test_doctor_is_registered_and_on_the_command_surface() -> None:

@@ -52,6 +52,7 @@ from billet.shared.errors import (
     BilletError,
     ConfigError,
     HostOperationError,
+    PackagedBerthMissing,
     ProcessError,
 )
 
@@ -248,7 +249,8 @@ def _error_view(exc: BilletError) -> tuple[str, Group | None]:
         return _process_error_view(exc)
     if isinstance(exc, ConfigError):
         lines = [Text(f"  {line}", style="meta") for line in str(exc).splitlines()]
-        lines.append(Text("  edit it, then retry"))
+        if not isinstance(exc, PackagedBerthMissing):  # its message already names the fix
+            lines.append(Text("  edit it, then retry"))
         return "config error", Group(*lines)
     if isinstance(exc, HostOperationError):
         # The message is verbatim manager copy that already suggests the fix; the first
