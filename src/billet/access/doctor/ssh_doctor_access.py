@@ -7,7 +7,7 @@ two parts over the same session (:class:`~billet.infrastructure.process.Conversa
 
 1. **reads**: per Workspace, ``git -C <repo_dir> rev-parse --short HEAD``, ``cat`` of the four
    files billet copies whole into ``.devcontainer/``, and ``cat`` of ``devcontainer.json``,
-   then the :data:`READS_DONE` line;
+   then the :attr:`~ProbeMarkers.reads_done` line;
 2. **runtime**: built on the Mac from the ``devcontainer.json`` just read, with billet's own
    parser, so the container lookup names the same service and compose files ``start`` drives.
    Per Workspace, under the usual compose prelude (``cd <repo_dir>``, billet's exports):
@@ -18,16 +18,23 @@ The probe never fetches, never forwards the agent, and never execs into a contai
 (ADR-0015 items 1 and 4). Every docker command reads ``/dev/null`` as stdin so none can
 swallow the rest of the script.
 
-Each value is framed by an ``===<section>===`` line; a file that could not be read is the
-single line ``===missing===``. ``cat`` output is followed by one newline so a file without a
-trailing newline cannot swallow the next marker; the extra blank line is harmless because
-the directive hash drops blank lines and JSONC ignores whitespace. A runtime section holds
-``running <id>`` and the entrypoint lines, or :data:`NOT_RUNNING`, or ends with
-:data:`RUNTIME_FAILED`.
+Each value is framed by an ``===<section>@<nonce>===`` line; a file that could not be read is
+the single line ``===missing@<nonce>===``. ``cat`` output is followed by one newline so a
+file without a trailing newline cannot swallow the next marker; the extra blank line is
+harmless because the directive hash drops blank lines and JSONC ignores whitespace. A runtime
+section holds ``running@<nonce> <id>`` and the entrypoint lines, or
+``not running@<nonce>``, or ends with ``runtime probe failed@<nonce>``.
+
+The nonce is random per probe run (D-A7-5), so no line of a consumer's file can be taken for
+a marker: without it, a copied file holding ``===doctor:reads-done===`` would fire the
+runtime part early and a line ``===head:x===`` would split the file. Every marker is built
+by :class:`ProbeMarkers`, which the pure script builders and parsers take as a parameter.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 import posixpath
+import secrets
 import shlex
 
 from billet.access.container.compose_script import (
@@ -54,19 +61,65 @@ from billet.shared.errors import BilletError, HostOperationError, ProcessError
 #: The consumer directory the Berth files are copied into (ADR-0012).
 DEVCONTAINER_DIR = ".devcontainer"
 
-#: The line that stands in for a value the probe could not read.
-MISSING_MARKER = "===missing==="
+# Random bytes per probe run: 64 bits, so a consumer file cannot carry the nonce by chance.
+_NONCE_BYTES = 8
 
-#: The line that ends the reads; the runtime part is sent once it arrives.
-READS_DONE = "===doctor:reads-done==="
 
-#: A runtime section's only line when the service has no running container.
-NOT_RUNNING = "not running"
+@dataclass(frozen=True, slots=True)
+class ProbeMarkers:
+    """Every in-band marker of one probe run, each carrying the run's ``nonce`` (D-A7-5).
 
-#: The line a runtime section ends with when ``docker compose ps`` or ``docker logs`` failed.
-RUNTIME_FAILED = "runtime probe failed"
+    Section headers are ``===<section>@<nonce>===``; the value markers put the nonce after
+    their word. Tests build one from a fixed nonce; :meth:`fresh` draws a random one.
+    """
 
-_RUNNING = "running "
+    nonce: str
+
+    @classmethod
+    def fresh(cls) -> "ProbeMarkers":
+        """Return the markers of a new run, with a random hex nonce."""
+        return cls(secrets.token_hex(_NONCE_BYTES))
+
+    def header(self, section: str) -> str:
+        """Return the line that opens ``section``."""
+        return f"==={section}{self._suffix}"
+
+    @property
+    def missing(self) -> str:
+        """The line that stands in for a value the probe could not read."""
+        return f"===missing@{self.nonce}==="
+
+    @property
+    def reads_done(self) -> str:
+        """The line that ends the reads; the runtime part is sent once it arrives."""
+        return self.header("doctor:reads-done")
+
+    @property
+    def not_running(self) -> str:
+        """A runtime section's only line when the service has no running container."""
+        return f"not running@{self.nonce}"
+
+    @property
+    def runtime_failed(self) -> str:
+        """The line a runtime section ends with when ``docker compose ps`` or ``docker logs`` failed."""
+        return f"runtime probe failed@{self.nonce}"
+
+    @property
+    def running(self) -> str:
+        """The prefix of a runtime section's first line, followed by the container id."""
+        return f"running@{self.nonce} "
+
+    def section_of(self, line: str) -> str | None:
+        """Return the section ``line`` opens, or ``None`` when it is not this run's header."""
+        suffix = self._suffix
+        if line.startswith("===") and line.endswith(suffix) and len(line) > 3 + len(suffix):
+            return line[3 : -len(suffix)]
+        return None
+
+    @property
+    def _suffix(self) -> str:
+        return f"@{self.nonce}==="
+
 
 # Bound connection establishment: a deallocated Azure host drops inbound packets, so an
 # untimed probe would hang (the `billet ls` precedent).
@@ -90,13 +143,21 @@ _SSH_TRANSPORT_RC = 255
 class SshDoctorAccess:
     """A ``DoctorAccess`` over one sectioned, two-part probe script per Host, run via SSH.
 
-    ``deadline`` (seconds) bounds each Host's probe. It is a parameter only so tests can
-    shorten it: the composition root takes the default, and there is no CLI flag.
+    ``deadline`` (seconds) bounds each Host's probe. It and ``new_markers`` (one fresh nonce
+    per probe run) are parameters only so tests can shorten the one and fix the other: the
+    composition root takes the defaults, and there is no CLI flag.
     """
 
-    def __init__(self, runner: ConversationRunner, *, deadline: float = _PROBE_DEADLINE) -> None:
+    def __init__(
+        self,
+        runner: ConversationRunner,
+        *,
+        deadline: float = _PROBE_DEADLINE,
+        new_markers: Callable[[], ProbeMarkers] = ProbeMarkers.fresh,
+    ) -> None:
         self._runner = runner
         self._deadline = deadline
+        self._new_markers = new_markers
 
     def probe(
         self, remote: RemoteHost, specs: Sequence[WorkspaceSpec]
@@ -122,13 +183,16 @@ class SshDoctorAccess:
             batch_mode=True,
         )
 
+        markers = self._new_markers()
+
         def reply(reads_output: str) -> str:
-            return runtime_script(specs, remote, read_facts(reads_output, specs))
+            facts = read_facts(reads_output, specs, markers)
+            return runtime_script(specs, remote, facts, markers)
 
         result = self._runner.converse(
             argv,
-            opening=reads_script(specs),
-            sentinel=READS_DONE,
+            opening=reads_script(specs, markers),
+            sentinel=markers.reads_done,
             reply=reply,
             timeout=self._deadline,
         )
@@ -139,7 +203,7 @@ class SshDoctorAccess:
             )
         if result.returncode != 0:
             raise ProcessError(result.argv, result.returncode, result.stderr)
-        return parse_probe_output(result.stdout, specs)
+        return parse_probe_output(result.stdout, specs, markers)
 
 
 # --- the probe script (pure) ----------------------------------------------------------
@@ -165,30 +229,31 @@ def runtime_section(key: str) -> str:
     return f"runtime:{key}"
 
 
-def _cat_or_missing(path: str) -> str:
+def _cat_or_missing(path: str, markers: ProbeMarkers) -> str:
     quoted = shlex.quote(path)
-    missing = shlex.quote(MISSING_MARKER)
+    missing = shlex.quote(markers.missing)
     return f"if [ -f {quoted} ]; then cat {quoted}; echo; else echo {missing}; fi"
 
 
-def _marker(section: str) -> str:
-    return f"echo {shlex.quote(f'==={section}===')}"
+def _echo(line: str) -> str:
+    return f"echo {shlex.quote(line)}"
 
 
-def reads_script(specs: Sequence[WorkspaceSpec]) -> str:
+def reads_script(specs: Sequence[WorkspaceSpec], markers: ProbeMarkers) -> str:
     """Build the reads part: each spec's HEAD, copied Berth files and ``devcontainer.json``."""
-    missing = shlex.quote(MISSING_MARKER)
+    missing = shlex.quote(markers.missing)
     lines = ["set -u"]
     for spec in specs:
         repo = shlex.quote(spec.repo_dir)
-        lines.append(_marker(head_section(spec.key)))
+        lines.append(_echo(markers.header(head_section(spec.key))))
         lines.append(f"git -C {repo} rev-parse --short HEAD 2>/dev/null || echo {missing}")
         for name in BERTH_COPIED_FILES:
-            lines.append(_marker(file_section(spec.key, name)))
-            lines.append(_cat_or_missing(posixpath.join(spec.repo_dir, DEVCONTAINER_DIR, name)))
-        lines.append(_marker(facts_section(spec.key)))
-        lines.append(_cat_or_missing(posixpath.join(spec.repo_dir, DEVCONTAINER_JSON)))
-    lines.append(f"echo {shlex.quote(READS_DONE)}")
+            lines.append(_echo(markers.header(file_section(spec.key, name))))
+            path = posixpath.join(spec.repo_dir, DEVCONTAINER_DIR, name)
+            lines.append(_cat_or_missing(path, markers))
+        lines.append(_echo(markers.header(facts_section(spec.key))))
+        lines.append(_cat_or_missing(posixpath.join(spec.repo_dir, DEVCONTAINER_JSON), markers))
+    lines.append(_echo(markers.reads_done))
     return "\n".join(lines) + "\n"
 
 
@@ -196,6 +261,7 @@ def runtime_script(
     specs: Sequence[WorkspaceSpec],
     remote: RemoteHost,
     facts: Mapping[str, DevcontainerFacts | str],
+    markers: ProbeMarkers,
 ) -> str:
     """Build the runtime part: per spec whose facts parsed, find its container and log.
 
@@ -210,17 +276,17 @@ def runtime_script(
             continue
         prefix = shlex.quote(f"^{ENTRYPOINT_LOG_PREFIX}")
         lines += [
-            _marker(runtime_section(spec.key)),
+            _echo(markers.header(runtime_section(spec.key))),
             "set +e",
             "(",
             compose_prelude(spec, remote).rstrip("\n"),
             f"ids=$({running_ps_command(spec_facts)} </dev/null)",
-            f'if [ -z "$ids" ]; then echo {shlex.quote(NOT_RUNNING)}; exit 0; fi',
+            f'if [ -z "$ids" ]; then {_echo(markers.not_running)}; exit 0; fi',
             "id=${ids%%$'\\n'*}",
-            f'echo "{_RUNNING}$id"',
+            f'echo {shlex.quote(markers.running)}"$id"',
             f'docker logs "$id" 2>&1 </dev/null | {{ grep {prefix} || true; }}',
             ")",
-            f'[ "$?" -eq 0 ] || echo {shlex.quote(RUNTIME_FAILED)}',
+            f'[ "$?" -eq 0 ] || {_echo(markers.runtime_failed)}',
             "set -e",
         ]
     return "\n".join(lines) + "\n" if lines else ""
@@ -229,9 +295,11 @@ def runtime_script(
 # --- parsing the sectioned output (pure) ----------------------------------------------
 
 
-def read_facts(text: str, specs: Sequence[WorkspaceSpec]) -> dict[str, DevcontainerFacts | str]:
+def read_facts(
+    text: str, specs: Sequence[WorkspaceSpec], markers: ProbeMarkers
+) -> dict[str, DevcontainerFacts | str]:
     """Parse each spec's ``devcontainer.json`` from probe output; a ``str`` is why it failed."""
-    sections = split_sections(text)
+    sections = split_sections(text, markers)
     facts: dict[str, DevcontainerFacts | str] = {}
     for spec in specs:
         path = posixpath.join(spec.repo_dir, DEVCONTAINER_JSON)
@@ -247,19 +315,19 @@ def read_facts(text: str, specs: Sequence[WorkspaceSpec]) -> dict[str, Devcontai
 
 
 def parse_runtime(
-    section: str | None, facts: DevcontainerFacts | str | None
+    section: str | None, facts: DevcontainerFacts | str | None, markers: ProbeMarkers
 ) -> WorkspaceRuntimeRead:
     """Turn one runtime section (and why it may be absent) into a :class:`WorkspaceRuntimeRead`."""
     if isinstance(facts, str):
         return WorkspaceRuntimeRead(RuntimeState.UNREADABLE, reason=facts)
     lines = section.splitlines() if section is not None else []
-    if RUNTIME_FAILED in lines:
+    if markers.runtime_failed in lines:
         return WorkspaceRuntimeRead(
             RuntimeState.UNREADABLE, reason="docker compose ps or docker logs failed"
         )
-    if lines[:1] == [NOT_RUNNING]:
+    if lines[:1] == [markers.not_running]:
         return WorkspaceRuntimeRead(RuntimeState.NOT_RUNNING)
-    if lines and lines[0].startswith(_RUNNING):
+    if lines and lines[0].startswith(markers.running):
         return WorkspaceRuntimeRead(
             RuntimeState.RUNNING,
             log_lines=tuple(line for line in lines[1:] if line.startswith(ENTRYPOINT_LOG_PREFIX)),
@@ -267,14 +335,16 @@ def parse_runtime(
     return WorkspaceRuntimeRead(RuntimeState.UNREADABLE, reason="no runtime output")
 
 
-def parse_probe_output(text: str, specs: Sequence[WorkspaceSpec]) -> tuple[WorkspaceProbe, ...]:
+def parse_probe_output(
+    text: str, specs: Sequence[WorkspaceSpec], markers: ProbeMarkers
+) -> tuple[WorkspaceProbe, ...]:
     """Turn the probe's sectioned stdout into one :class:`WorkspaceProbe` per spec.
 
     A file section that is absent from the output, or that holds the missing marker, reads as
     ``None`` (file absent / not a git checkout).
     """
-    sections = split_sections(text)
-    facts = read_facts(text, specs)
+    sections = split_sections(text, markers)
+    facts = read_facts(text, specs, markers)
     probes: list[WorkspaceProbe] = []
     for spec in specs:
         head = sections.get(head_section(spec.key))
@@ -283,28 +353,33 @@ def parse_probe_output(text: str, specs: Sequence[WorkspaceSpec]) -> tuple[Works
             head=(head.strip() or None) if head is not None else None,
             files={name: sections.get(file_section(spec.key, name)) for name in BERTH_COPIED_FILES},
         )
-        runtime = parse_runtime(sections.get(runtime_section(spec.key)), facts.get(spec.key))
+        runtime = parse_runtime(
+            sections.get(runtime_section(spec.key)), facts.get(spec.key), markers
+        )
         probes.append(WorkspaceProbe(berth=berth, runtime=runtime))
     return tuple(probes)
 
 
-def split_sections(text: str) -> dict[str, str | None]:
-    """Group raw output lines under their ``===name===`` markers, keeping content verbatim.
+def split_sections(text: str, markers: ProbeMarkers) -> dict[str, str | None]:
+    """Group raw output lines under this run's section headers, keeping content verbatim.
 
     Unlike the metrics splitter this keeps blank and indented lines: they are file content.
+    Only a header carrying ``markers``' nonce opens a section, so a consumer line shaped like
+    one (``===head:x===``) stays in the file it belongs to.
     """
     raw: dict[str, list[str]] = {}
     current: list[str] | None = None
     for line in text.splitlines():
-        if line == MISSING_MARKER:
+        if line == markers.missing:
             if current is not None:
                 current.append(line)
             continue
-        if line.startswith("===") and line.endswith("===") and len(line) > len("======"):
-            current = raw.setdefault(line[3:-3], [])
+        section = markers.section_of(line)
+        if section is not None:
+            current = raw.setdefault(section, [])
         elif current is not None:
             current.append(line)
     sections: dict[str, str | None] = {}
     for name, body in raw.items():
-        sections[name] = None if body == [MISSING_MARKER] else "\n".join(body)
+        sections[name] = None if body == [markers.missing] else "\n".join(body)
     return sections
