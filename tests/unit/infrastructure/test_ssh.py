@@ -25,6 +25,14 @@ def test_batch_and_connect_timeout_flags() -> None:
     assert "BatchMode=yes" in argv
 
 
+def test_keepalive_flags_appear_only_when_asked_for() -> None:
+    argv = ssh.ssh_argv("u", "h", "true", server_alive_interval=5, server_alive_count_max=3)
+    assert argv[argv.index("ServerAliveInterval=5") - 1] == "-o"
+    assert argv[argv.index("ServerAliveCountMax=3") - 1] == "-o"
+    default = " ".join(ssh.ssh_argv("u", "h", "true", connect_timeout=5, batch_mode=True))
+    assert "ServerAlive" not in default  # every caller but doctor keeps its argv
+
+
 def test_tty_adds_dash_t() -> None:
     argv = ssh.ssh_argv("u", "h", "cmd", tty=True)
     assert "-t" in argv

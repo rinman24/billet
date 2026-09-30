@@ -32,3 +32,15 @@ class ProcessError(BilletError):
         self.stderr = stderr
         command = " ".join(self.argv)
         super().__init__(f"command failed (exit {returncode}): {command}\n{stderr}".rstrip())
+
+
+class ProcessTimeoutError(ProcessError):
+    """An external command was killed for exceeding its deadline.
+
+    A killed process has no meaningful exit status, so ``returncode`` is the sentinel ``-1``
+    and ``timeout`` (seconds) is what callers key on — never the message text.
+    """
+
+    def __init__(self, argv: Sequence[str], timeout: float) -> None:
+        self.timeout = timeout
+        super().__init__(argv, -1, f"timed out after {timeout:g}s")

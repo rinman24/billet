@@ -420,6 +420,16 @@ def test_doctor_skips_a_host_whose_probe_fails_with_the_reason() -> None:
     assert skip.reason.startswith("probe failed: command failed (exit 1)")
 
 
+def test_doctor_skips_a_host_whose_probe_times_out_as_its_own_reason() -> None:
+    """D-A7-3: typed, not the generic `probe failed: command failed (exit -1): ssh …`."""
+    doctor = FakeDoctorAccess(timing_out=["other-box"])
+    report = _doctor_manager(doctor).doctor(DOCTOR_ITEMS, make_packaged_berth(), DoctorFilters())
+    assert report.skipped == (
+        DoctorSkip(host="other", reason="probe timed out after 30s", workspaces=("squadra",)),
+    )
+    assert [s.workspace for s in report.statuses] == ["gswa-backend", "billet"]
+
+
 def test_doctor_over_the_real_access_makes_exactly_one_ssh_call_per_host() -> None:
     runner = FakeProcessRunner(lambda _argv: completed(stdout=""))
     manager = WorkspaceManager(

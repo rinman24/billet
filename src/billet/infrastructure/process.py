@@ -5,12 +5,13 @@ to spy on the exact argv passed to ``az`` / ``ssh`` without running anything.
 """
 
 from collections.abc import Callable, Sequence
+import contextlib
 from dataclasses import dataclass
 import subprocess
 import threading
 from typing import IO, Protocol
 
-from billet.shared.errors import ProcessError
+from billet.shared.errors import ProcessError, ProcessTimeoutError
 
 # A per-line output callback (newline stripped). Streaming merges stdout and stderr —
 # docker/BuildKit write build progress to stderr, so a stdout-only tail would be blank.
@@ -18,10 +19,6 @@ OnLine = Callable[[str], None]
 
 # Builds the second part of a two-part stdin script from the stdout the first part produced.
 Reply = Callable[[str], str]
-
-# Sentinel returncode reported when a run is killed for exceeding its timeout — a killed
-# process has no meaningful exit status, so callers key on the raised ProcessError instead.
-_TIMEOUT_RC = -1
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +49,7 @@ class ProcessRunner(Protocol):
         captured in full on the returned result either way (the error path needs it).
 
         ``timeout`` (seconds, optional) bounds a buffered run: on expiry the process is
-        killed and :class:`ProcessError` is raised regardless of ``check`` (a killed
+        killed and :class:`ProcessTimeoutError` is raised regardless of ``check`` (a killed
         process has no meaningful result). It is honored only on the buffered path — a
         streaming (``on_line``) run ignores it, as no streaming caller sets a deadline.
         """
@@ -69,7 +66,13 @@ class ConversationRunner(Protocol):
     """
 
     def converse(
-        self, argv: Sequence[str], *, opening: str, sentinel: str, reply: Reply
+        self,
+        argv: Sequence[str],
+        *,
+        opening: str,
+        sentinel: str,
+        reply: Reply,
+        timeout: float | None = None,
     ) -> CompletedProcess:
         """Run ``argv`` with stdin held open across two writes; never raise on exit status.
 
@@ -78,6 +81,11 @@ class ConversationRunner(Protocol):
         the sentinel (the command died, or ssh never connected), ``reply`` is not called.
         The result's stdout is everything printed, sentinel line included; the caller
         interprets the exit status.
+
+        ``timeout`` (seconds, optional) bounds the whole conversation, opening through exit:
+        on expiry the command is killed and reaped and :class:`ProcessTimeoutError` is
+        raised. If ``reply`` (or anything else mid-conversation) raises, the command is
+        killed and reaped too, and the exception propagates: no child outlives the call.
         """
         ...
 
@@ -109,9 +117,7 @@ class SubprocessRunner:
             )
         except subprocess.TimeoutExpired as exc:
             # The child is already killed by subprocess; surface the deadline loudly.
-            raise ProcessError(
-                tuple(argv), _TIMEOUT_RC, f"timed out after {exc.timeout:g}s"
-            ) from exc
+            raise ProcessTimeoutError(tuple(argv), exc.timeout) from exc
         result = CompletedProcess(
             argv=tuple(argv),
             returncode=proc.returncode,
@@ -123,7 +129,13 @@ class SubprocessRunner:
         return result
 
     def converse(
-        self, argv: Sequence[str], *, opening: str, sentinel: str, reply: Reply
+        self,
+        argv: Sequence[str],
+        *,
+        opening: str,
+        sentinel: str,
+        reply: Reply,
+        timeout: float | None = None,
     ) -> CompletedProcess:
         """Run ``argv`` with a two-part stdin script (see :class:`ConversationRunner`)."""
         proc = subprocess.Popen(
@@ -137,29 +149,79 @@ class SubprocessRunner:
         stderr_lines: list[str] = []
         drain = threading.Thread(target=_collect, args=(proc.stderr, stderr_lines), daemon=True)
         drain.start()
-        stdout_lines: list[str] = []
-        open_ = _send(proc.stdin, opening)
-        reached = False
-        # readline, not iteration: the loop stops mid-stream and resumes after the reply.
-        while line := proc.stdout.readline():
-            stdout_lines.append(line)
-            if line.rstrip("\n") == sentinel:
-                reached = True
-                break
-        if reached and open_:
-            _send(proc.stdin, reply("".join(stdout_lines)))
+        # readline blocks, so no check inside the loop can honor a deadline: a watchdog
+        # kills the command instead, and every read then sees end of stream.
+        watchdog = _Watchdog(proc, timeout)
         try:
-            proc.stdin.close()
-        except BrokenPipeError:
-            pass  # the command already exited; its exit status decides
-        stdout_lines.extend(proc.stdout.readlines())
-        drain.join()
+            stdout_lines: list[str] = []
+            open_ = _send(proc.stdin, opening)
+            reached = False
+            # readline, not iteration: the loop stops mid-stream and resumes after the reply.
+            while line := proc.stdout.readline():
+                stdout_lines.append(line)
+                if line.rstrip("\n") == sentinel:
+                    reached = True
+                    break
+            if reached and open_:
+                _send(proc.stdin, reply("".join(stdout_lines)))
+            try:
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass  # the command already exited; its exit status decides
+            stdout_lines.extend(proc.stdout.readlines())
+            returncode: int = proc.wait()
+        finally:
+            # One cleanup for every exit: the deadline, a raising reply, or a clean finish.
+            watchdog.cancel()
+            _reap(proc, drain)
+        if timeout is not None and watchdog.expired:
+            raise ProcessTimeoutError(argv, timeout)
         return CompletedProcess(
             argv=tuple(argv),
-            returncode=proc.wait(),
+            returncode=returncode,
             stdout="".join(stdout_lines),
             stderr="".join(stderr_lines),
         )
+
+
+class _Watchdog:
+    """Kill a process that is still running ``timeout`` seconds from now (``None``: never)."""
+
+    def __init__(self, proc: subprocess.Popen[str], timeout: float | None) -> None:
+        self._proc = proc
+        self._expired = threading.Event()
+        self._timer: threading.Timer | None = None
+        if timeout is not None:
+            self._timer = threading.Timer(timeout, self._expire)
+            self._timer.daemon = True
+            self._timer.start()
+
+    @property
+    def expired(self) -> bool:
+        """Whether the deadline passed with the process still running (and so killed it)."""
+        return self._expired.is_set()
+
+    def cancel(self) -> None:
+        """Stop the timer; a no-op once it has fired or when there is none."""
+        if self._timer is not None:
+            self._timer.cancel()
+
+    def _expire(self) -> None:
+        if self._proc.poll() is None:
+            self._expired.set()
+            self._proc.kill()
+
+
+def _reap(proc: subprocess.Popen[str], drain: threading.Thread) -> None:
+    """Kill ``proc`` if it still runs, wait for it, join the stderr drain, close its pipes."""
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait()
+    drain.join()
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is not None:
+            with contextlib.suppress(OSError):  # a broken stdin cannot flush its buffer
+                stream.close()
 
 
 def _send(stdin: IO[str], text: str) -> bool:

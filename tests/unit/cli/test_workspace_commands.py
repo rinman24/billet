@@ -5,17 +5,20 @@ the full command path (config parse -> host plan/gate -> workspace plan/apply) w
 invoking ``az`` / ``ssh`` / ``os.execvp``.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import json
 from pathlib import Path
+import sys
 
 import pytest
 from typer.testing import CliRunner
 
 from billet import __version__
+from billet.access.doctor.ssh_doctor_access import SshDoctorAccess
 from billet.cli import _ui, workspace_commands as wc
 from billet.cli.app import app
-from billet.contracts import HostPowerState, HostStatus, PackagedBerth
+from billet.contracts import DoctorAccess, HostPowerState, HostStatus, PackagedBerth
+from billet.infrastructure.process import CompletedProcess, SubprocessRunner
 from billet.shared.errors import ConfigError, HostOperationError
 from billet.workspace.manager.workspace_manager import WorkspaceManager
 from tests.unit._fakes import (
@@ -69,7 +72,7 @@ def _install(
     source: FakeSourceAccess | None = None,
     container: FakeContainerAccess | None = None,
     ssh_config: FakeSshConfigAccess | None = None,
-    doctor: FakeDoctorAccess | None = None,
+    doctor: DoctorAccess | None = None,
 ) -> tuple[FakeHostProvider, FakeSourceAccess, FakeContainerAccess, FakeSshConfigAccess]:
     prov = provider or FakeHostProvider(
         HostStatus(HostPowerState.RUNNING, "20.0.0.5", "VM running")
@@ -293,6 +296,34 @@ def test_doctor_skips_an_unreachable_host_with_exit_zero(
     assert result.exit_code == 0
     assert "skipped: host devbox unreachable" in result.output
     assert prov.calls == []  # never started, never even asked
+
+
+class _NeverFinishing:
+    """A ConversationRunner that swaps the ssh argv for a real local child that never ends."""
+
+    def converse(
+        self,
+        argv: Sequence[str],
+        *,
+        opening: str,
+        sentinel: str,
+        reply: Callable[[str], str],
+        timeout: float | None = None,
+    ) -> CompletedProcess:
+        hang = [sys.executable, "-c", "import time; time.sleep(60)"]
+        return SubprocessRunner().converse(
+            hang, opening=opening, sentinel=sentinel, reply=reply, timeout=timeout
+        )
+
+
+def test_doctor_reports_a_probe_past_its_deadline_as_timed_out_with_exit_zero(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    _install(monkeypatch, doctor=SshDoctorAccess(_NeverFinishing(), deadline=0.5))
+    result = runner.invoke(app, ["doctor", "--config", str(config_file)])
+    assert result.exit_code == 0
+    assert "skipped: host devbox probe timed out after 0.5s (gswa-backend)" in result.output
+    assert "command failed" not in result.output
 
 
 def test_doctor_rejects_an_unknown_filter(

@@ -222,6 +222,7 @@ class DoctorAccess(Protocol):
     ) -> tuple[WorkspaceProbe, ...]:
         """Probe ``remote`` once and return one probe per spec, in ``specs`` order.
 
-        Raises ``HostOperationError`` when the Host cannot be reached over SSH.
+        Raises ``HostOperationError`` when the Host cannot be reached over SSH, and
+        ``ProcessTimeoutError`` when the probe outlives its deadline.
         """
         ...

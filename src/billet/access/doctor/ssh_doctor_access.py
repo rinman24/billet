@@ -68,29 +68,57 @@ RUNTIME_FAILED = "runtime probe failed"
 
 _RUNNING = "running "
 
-# Bound connection establishment only (never command runtime): a deallocated Azure host
-# drops inbound packets, so an untimed probe would hang (the `billet ls` precedent).
+# Bound connection establishment: a deallocated Azure host drops inbound packets, so an
+# untimed probe would hang (the `billet ls` precedent).
 _SSH_CONNECT_TIMEOUT = 5
+
+# Keepalives (D-A7-2): a link that dies mid-probe ends as ssh exit 255, reported unreachable
+# like a failed connect, after about 5 s x 3 unanswered probes, well inside the deadline.
+_SSH_SERVER_ALIVE_INTERVAL = 5
+_SSH_SERVER_ALIVE_COUNT_MAX = 3
+
+# The wall-clock bound on one Host's whole probe conversation, opening through exit
+# (D-A7-2). A live link on which the probe stalls (a hung `docker`, say) is what the
+# keepalives cannot end; on expiry the ssh child is killed and the Host is reported
+# `probe timed out` (D-A7-3). The measured run is about 2 s for four Workspaces.
+_PROBE_DEADLINE = 30.0
 
 # ssh(1) reserves exit 255 for its own failures (connect/auth); the probe never produces it.
 _SSH_TRANSPORT_RC = 255
 
 
 class SshDoctorAccess:
-    """A ``DoctorAccess`` over one sectioned, two-part probe script per Host, run via SSH."""
+    """A ``DoctorAccess`` over one sectioned, two-part probe script per Host, run via SSH.
 
-    def __init__(self, runner: ConversationRunner) -> None:
+    ``deadline`` (seconds) bounds each Host's probe. It is a parameter only so tests can
+    shorten it: the composition root takes the default, and there is no CLI flag.
+    """
+
+    def __init__(self, runner: ConversationRunner, *, deadline: float = _PROBE_DEADLINE) -> None:
         self._runner = runner
+        self._deadline = deadline
 
     def probe(
         self, remote: RemoteHost, specs: Sequence[WorkspaceSpec]
     ) -> tuple[WorkspaceProbe, ...]:
-        """Run the probe for ``specs`` on ``remote`` in one session; one probe per spec."""
+        """Run the probe for ``specs`` on ``remote`` in one session; one probe per spec.
+
+        Raises
+        ------
+        HostOperationError
+            When ssh itself fails (exit 255): the Host cannot be reached, or the link died.
+        ProcessTimeoutError
+            When the conversation outlives the deadline; the ssh child has been killed.
+        ProcessError
+            When the probe script exits non-zero on the Host.
+        """
         argv = ssh.ssh_argv(
             remote.admin_user,
             remote.ip,
             "bash -se",
             connect_timeout=_SSH_CONNECT_TIMEOUT,
+            server_alive_interval=_SSH_SERVER_ALIVE_INTERVAL,
+            server_alive_count_max=_SSH_SERVER_ALIVE_COUNT_MAX,
             batch_mode=True,
         )
 
@@ -98,7 +126,11 @@ class SshDoctorAccess:
             return runtime_script(specs, remote, read_facts(reads_output, specs))
 
         result = self._runner.converse(
-            argv, opening=reads_script(specs), sentinel=READS_DONE, reply=reply
+            argv,
+            opening=reads_script(specs),
+            sentinel=READS_DONE,
+            reply=reply,
+            timeout=self._deadline,
         )
         if result.returncode == _SSH_TRANSPORT_RC:
             raise HostOperationError(

@@ -27,8 +27,8 @@ from billet.access.doctor.ssh_doctor_access import (
     runtime_script,
 )
 from billet.contracts import DevcontainerFacts, RuntimeState, WorkspaceSpec
-from billet.infrastructure.process import SubprocessRunner
-from billet.shared.errors import HostOperationError, ProcessError
+from billet.infrastructure.process import CompletedProcess, SubprocessRunner
+from billet.shared.errors import HostOperationError, ProcessError, ProcessTimeoutError
 from tests.unit._fakes import FakeProcessRunner, completed, make_remote_host, make_workspace_spec
 
 REMOTE = make_remote_host()
@@ -114,6 +114,20 @@ def test_the_probe_is_batch_mode_bash_on_stdin_without_agent_forwarding() -> Non
     assert "azureuser@20.0.0.5" in argv
     facts = read_facts(_RECORDED, [GSWA])
     assert runner.inputs[0] == reads_script([GSWA]) + runtime_script([GSWA], REMOTE, facts)
+    assert runner.timeouts == [30]  # the per-Host deadline over the whole conversation
+
+
+def test_the_probe_argv_bounds_the_connect_and_a_dead_link() -> None:
+    """D-A7-2: keepalives end a dead link as ssh exit 255 in ~15 s, inside the deadline."""
+    access, runner = _access()
+    access.probe(REMOTE, [GSWA])
+    options = {v for k, v in zip(runner.calls[0], runner.calls[0][1:], strict=False) if k == "-o"}
+    assert {
+        "ConnectTimeout=5",
+        "BatchMode=yes",
+        "ServerAliveInterval=5",
+        "ServerAliveCountMax=3",
+    } <= options
 
 
 def _commands(script: str) -> set[str]:
@@ -226,6 +240,15 @@ def test_a_section_absent_from_the_output_reads_as_missing() -> None:
 def test_ssh_transport_failure_is_host_unreachable() -> None:
     access, _ = _access(stdout="", returncode=255)
     with pytest.raises(HostOperationError, match="could not reach 20.0.0.5"):
+        access.probe(REMOTE, [GSWA])
+
+
+def test_a_probe_past_its_deadline_raises_the_typed_timeout() -> None:
+    def _hang(argv: list[str]) -> CompletedProcess:
+        raise ProcessTimeoutError(argv, 30)
+
+    access = SshDoctorAccess(FakeProcessRunner(_hang))
+    with pytest.raises(ProcessTimeoutError):
         access.probe(REMOTE, [GSWA])
 
 

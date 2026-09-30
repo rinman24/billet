@@ -17,6 +17,8 @@ def ssh_argv(  # noqa: PLR0913 — a thin argv builder; each option maps to one 
     remote_command: str | None = None,
     *,
     connect_timeout: int | None = None,
+    server_alive_interval: int | None = None,
+    server_alive_count_max: int | None = None,
     batch_mode: bool = False,
     tty: bool = False,
     forward_agent: bool = False,
@@ -29,6 +31,10 @@ def ssh_argv(  # noqa: PLR0913 — a thin argv builder; each option maps to one 
         The remote user, producing a ``user@host`` target. Pass ``None`` to target a
         bare ``host`` — used when ``host`` is an ``ssh_config`` alias that already
         supplies the user (the ``connect`` path).
+    server_alive_interval, server_alive_count_max
+        Probe a quiet link every ``server_alive_interval`` seconds and give up (ssh exit
+        255) after ``server_alive_count_max`` unanswered probes — so a link that dies
+        mid-session ends in about their product instead of hanging (``doctor``).
     tty
         Request a remote TTY (``ssh -t``) — for the interactive ``connect`` shell.
     forward_agent
@@ -42,6 +48,10 @@ def ssh_argv(  # noqa: PLR0913 — a thin argv builder; each option maps to one 
         argv.append("-A")
     if connect_timeout is not None:
         argv += ["-o", f"ConnectTimeout={connect_timeout}"]
+    if server_alive_interval is not None:
+        argv += ["-o", f"ServerAliveInterval={server_alive_interval}"]
+    if server_alive_count_max is not None:
+        argv += ["-o", f"ServerAliveCountMax={server_alive_count_max}"]
     if batch_mode:
         argv += ["-o", "BatchMode=yes"]
     argv.append(f"{user}@{host}" if user else host)
