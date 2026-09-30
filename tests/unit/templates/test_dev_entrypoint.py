@@ -188,10 +188,11 @@ def test_values_pam_env_cannot_express_are_skipped_with_a_warning(
 
 
 def test_names_that_are_not_shell_identifiers_are_dropped_silently(tmp_path: Path) -> None:
-    rendered = _render(tmp_path, {"BAD-KEY": "x", "9LEADING_DIGIT": "x", "GOOD_KEY": "x"})
+    # GOOD_NAME, not the Berth 1 GOOD_KEY: `*_KEY` is a credential glob from Berth 2.
+    rendered = _render(tmp_path, {"BAD-KEY": "x", "9LEADING_DIGIT": "x", "GOOD_NAME": "x"})
     assert not any("BAD-KEY" in line for line in rendered.block)
     assert not any("9LEADING_DIGIT" in line for line in rendered.block)
-    assert rendered.value_of("GOOD_KEY") == '"x"'
+    assert rendered.value_of("GOOD_NAME") == '"x"'
     assert "skipping" not in rendered.stderr
 
 

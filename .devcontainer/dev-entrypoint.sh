@@ -3,7 +3,7 @@
 # container's environment where sshd login shells can see it, then hand off to the CMD
 # (`sleep infinity`). Mirrors gswa's dev-entrypoint.sh stripped to just the sshd
 # bring-up. The venv bootstrap (`uv sync --frozen`) is devcontainer.json's
-# postCreateCommand, which billet runs after a cold `billet start` (and VS Code runs on
+# postCreateCommand, which billet runs on every `billet start` (and VS Code runs on
 # attach). A bare `docker compose up` runs neither — do `make install` by hand there.
 #
 # sshd must run as root (privilege separation + per-session setuid to `dev`), but the
@@ -24,10 +24,52 @@ ENV_BLOCK_END="# <<< billet dev-entrypoint <<<"
 # pinned globally to whatever this entrypoint happened to be started with.
 ENV_EXCLUDE="HOME PATH SHELL USER LOGNAME PWD OLDPWD HOSTNAME TERM SHLVL _"
 
+# The credential backstop (Berth 2, ADR-0003 amendment 2026-09-30). The snapshot is not a
+# secret channel, yet compose `environment:` can still carry a credential into it, so a
+# variable whose NAME or VALUE looks like one is withheld and logged by name, never value.
+# A consumer that knowingly needs such a variable in ssh sessions lists its exact name in
+# BILLET_ENV_PUBLISH (space-separated, set in compose `environment:`). That overrides this
+# check only: it cannot publish an ENV_EXCLUDE name or a value pam_env cannot express, and
+# BILLET_ENV_PUBLISH itself is never published.
+#
+# Kit-owned names that match a credential glob but are not credentials. GPG_KEY is the
+# python base image's public signing-key id.
+ENV_CREDENTIAL_NAME_EXEMPT="GPG_KEY"
+# A URL whose userinfo carries a password before the first `/`: scheme://[user]:pass@...
+ENV_CREDENTIAL_URL_RE='^[A-Za-z][A-Za-z0-9+.-]*://[^/@:]*:[^/@]*@'
+
+# Succeed when KEY or VALUE looks like a credential. The name globs match
+# case-insensitively; `nocasematch`, scoped to the one `case`, does what `${key^^}` would
+# while keeping the script runnable by the bash 3.2 that billet's test suite meets on macOS.
+env_looks_like_credential() {
+    local key="$1" value="$2" by_name=1
+
+    case " ${ENV_CREDENTIAL_NAME_EXEMPT} " in
+        *" ${key} "*) ;;
+        *)
+            shopt -s nocasematch
+            case "${key}" in
+                *TOKEN* | *SECRET* | *PASSWORD* | *PASSWD* | *_PASS | *PASSPHRASE* | \
+                *CREDENTIAL* | *API_KEY* | *ACCESS_KEY* | *PRIVATE_KEY* | *_KEY | *_PAT)
+                    by_name=0
+                    ;;
+            esac
+            shopt -u nocasematch
+            ;;
+    esac
+    if [ "${by_name}" -eq 0 ]; then
+        return 0
+    fi
+    [[ ${value} =~ ${ENV_CREDENTIAL_URL_RE} ]]
+}
+
 # Render the merged environment file on STDOUT: every line the file already has that
 # billet does not own, then a freshly regenerated billet block holding this container's
 # environment in pam_env's `KEY="value"` form. Regenerating between the markers keeps the
 # write idempotent across restarts while preserving anything the image baked in.
+#
+# A credential-shaped variable is withheld with a warning unless BILLET_ENV_PUBLISH lists
+# it (see env_looks_like_credential above).
 #
 # pam_env strips ONE pair of surrounding quotes, does no backslash unescaping, and joins a
 # line ending in a backslash onto the next — so a value containing `"`, `\` or a control
@@ -35,6 +77,9 @@ ENV_EXCLUDE="HOME PATH SHELL USER LOGNAME PWD OLDPWD HOSTNAME TERM SHLVL _"
 # rather than written back mangled.
 render_container_env() {
     local pair key value
+    # Read once; any whitespace separates names, and the padding makes `*" KEY "*` exact.
+    local publish=" ${BILLET_ENV_PUBLISH:-} "
+    publish="${publish//[[:space:]]/ }"
 
     if [ -f "${ENV_FILE}" ]; then
         awk -v begin="${ENV_BLOCK_BEGIN}" -v end="${ENV_BLOCK_END}" '
@@ -56,8 +101,19 @@ render_container_env() {
             case " ${ENV_EXCLUDE} " in
                 *" ${key} "*) continue ;;
             esac
+            [ "${key}" != BILLET_ENV_PUBLISH ] || continue
             case "${key}" in
                 "" | [!A-Za-z_]* | *[!A-Za-z0-9_]*) continue ;;
+            esac
+            case "${publish}" in
+                *" ${key} "*) ;;
+                *)
+                    if env_looks_like_credential "${key}" "${value}"; then
+                        echo "dev-entrypoint: withholding ${key} (looks like a credential;" \
+                             "list it in BILLET_ENV_PUBLISH to publish)" >&2
+                        continue
+                    fi
+                    ;;
             esac
             case "${value}" in
                 *'"'* | *\\* | *[[:cntrl:]]*)
@@ -75,9 +131,9 @@ render_container_env() {
 # --- Berth: mount-target ownership repair (ADR-0013) -----------------------------------
 # A named volume mounted at a path the image did not pre-create dev-owned lands
 # root:root, and the tool whose state it persists cannot write it. The image is the wrong
-# place to guarantee ownership — a Workspace on a shared base image does not author its
-# Dockerfile — so the ownership is repaired here, at the one moment both the volume and
-# the login user are present. Policy, per target: a directory owned by uid 0 and EMPTY is
+# place to guarantee ownership — the entrypoint is the one component present when the
+# mount happens, whoever wrote the Dockerfile — so the ownership is repaired here, at the
+# one moment both the volume and the login user are present. Policy, per target: a directory owned by uid 0 and EMPTY is
 # re-owned to the login user (0700); everything else is reported and left alone, mode
 # included. Never recursive, never `chown -R`, never fatal: sshd is the operator's way in
 # to fix whatever this could not, so starting it always comes first.
@@ -201,7 +257,8 @@ fi
 #
 # NOT a secret channel: this file is world-readable and unencrypted, and the skip rule
 # above means a value can also be silently dropped. Credentials keep travelling through
-# ~/.claude/settings.json (ADR-0006) — never compose `environment:`.
+# ~/.claude/settings.json (ADR-0006) — never compose `environment:`. The credential check
+# in render_container_env() is only a backstop for a credential put there anyway.
 echo "dev-entrypoint: publishing the container environment to ${ENV_FILE} for sshd login shells"
 ENV_TMP="$(mktemp)"
 render_container_env >"${ENV_TMP}"
