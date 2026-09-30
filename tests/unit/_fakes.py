@@ -28,7 +28,12 @@ from billet.contracts import (
     WorkspaceSpec,
 )
 from billet.infrastructure.process import CompletedProcess
-from billet.shared.errors import ConfigError, HostOperationError, ProcessError
+from billet.shared.errors import (
+    ConfigError,
+    HostOperationError,
+    ProcessError,
+    ProcessTimeoutError,
+)
 
 _DEFAULT_HOST_SPEC = HostSpec(
     key="devbox",
@@ -149,14 +154,16 @@ class FakeProcessRunner:
         opening: str,
         sentinel: str,
         reply: Callable[[str], str],
+        timeout: float | None = None,
     ) -> CompletedProcess:
         """Replay the scripted stdout: the part up to ``sentinel`` feeds ``reply``.
 
         The call is recorded once, like ``run``; its input is the opening plus the reply.
+        A handler that raises (e.g. :class:`ProcessTimeoutError`) raises from here.
         """
         argv_list = list(argv)
         self.calls.append(tuple(argv_list))
-        self.timeouts.append(None)
+        self.timeouts.append(timeout)
         scripted = self._handler(argv_list)
         head: list[str] = []
         second = ""
@@ -414,8 +421,9 @@ def make_runtime_read(*log_lines: str) -> WorkspaceRuntimeRead:
 class FakeDoctorAccess:
     """A DoctorAccess that records each probed Host and returns scripted probes.
 
-    ``unreachable`` / ``failing`` name Host *ips* whose probe raises the way the real access
-    does (``HostOperationError`` for an SSH transport failure, ``ProcessError`` otherwise).
+    ``unreachable`` / ``failing`` / ``timing_out`` name Host *ips* whose probe raises the way
+    the real access does (``HostOperationError`` for an SSH transport failure,
+    ``ProcessTimeoutError`` past the 30 s deadline, ``ProcessError`` otherwise).
     ``overrides`` maps a Workspace key to the file overrides its read carries; ``runtimes``
     maps a Workspace key to its runtime read (default: running, clean, on the shipped Berth).
     """
@@ -425,11 +433,13 @@ class FakeDoctorAccess:
         *,
         unreachable: Sequence[str] = (),
         failing: Sequence[str] = (),
+        timing_out: Sequence[str] = (),
         overrides: Mapping[str, Mapping[str, str | None]] | None = None,
         runtimes: Mapping[str, WorkspaceRuntimeRead] | None = None,
     ) -> None:
         self._unreachable = frozenset(unreachable)
         self._failing = frozenset(failing)
+        self._timing_out = frozenset(timing_out)
         self._overrides = overrides or {}
         self._runtimes = runtimes or {}
         self.calls: list[tuple[str, tuple[str, ...]]] = []
@@ -442,6 +452,8 @@ class FakeDoctorAccess:
             raise HostOperationError(f"could not reach {remote.ip} over SSH")
         if remote.ip in self._failing:
             raise ProcessError(["ssh", remote.ip, "bash -se"], 1, "bash: boom")
+        if remote.ip in self._timing_out:
+            raise ProcessTimeoutError(["ssh", remote.ip, "bash -se"], 30)
         return tuple(
             WorkspaceProbe(
                 berth=make_berth_read(spec.key, overrides=self._overrides.get(spec.key)),

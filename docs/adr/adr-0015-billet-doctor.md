@@ -6,7 +6,9 @@ Accepted (2026-09-29). Implemented for the Berth-file checks: `billet doctor` co
 Workspace's copied Berth files with the Berth the installed billet ships. Implemented for the
 runtime report (2026-09-29): for each running Workspace, `doctor` reports the Berth the
 container started with against the checkout's stamp, and the Locker-ownership repairs and
-warnings, all from the entrypoint's own log. The compose-file read below remains **proposed and
+warnings, all from the entrypoint's own log. Hardened 2026-09-30: each Host's probe is bounded
+by ssh keepalives and a 30 s deadline, every probe marker carries a per-run nonce, and the diff
+cap counts changed lines only (item 1, item 2). The compose-file read below remains **proposed and
 not in effect**: no check in this cycle opens a compose file.
 
 Proposed 2026-09-14 as the decision record for the verification half of
@@ -66,7 +68,17 @@ never fail. No Dockerfile parsing.**
    never runs a compose verb that changes state. An
    unreachable Host is reported `skipped: host <name> unreachable`, following `billet ls`, and is
    never started or allocated: `doctor` reaches a Host through its ssh-config alias and makes no
-   `az` call. It reads the checkout as it is and never fetches; each Workspace's section shows
+   `az` call. The probe is bounded (*amended 2026-09-30*). Its ssh session carries
+   `ConnectTimeout=5` and `BatchMode=yes`, plus keepalives (`ServerAliveInterval=5`,
+   `ServerAliveCountMax=3`), so a link that dies mid-probe ends as ssh exit 255, reported
+   unreachable, in about 15 s. A wall-clock deadline of 30 s covers each Host's whole
+   conversation, opening through exit; on expiry billet kills the ssh child and reports the Host
+   `skipped: host <name> probe timed out after 30s`, a reason distinct from unreachable (ssh
+   connected; the probe stalled). The deadline is a constant, with no flag. Every in-band marker
+   of the probe carries a nonce drawn at random for each run: the section headers
+   (`===<section>@<nonce>===`), the missing-value marker, the end-of-reads sentinel that
+   triggers the runtime part, and the runtime markers. A line in a consumer's file that looks
+   like a marker therefore stays file content. It reads the checkout as it is and never fetches; each Workspace's section shows
    the checkout's short HEAD, so a checkout lagging its remote is visible. Output is one section
    per Workspace with `ok` / `warn` lines. The exit status is 0 whatever the report says, and
    non-zero only when `doctor` itself could not run (a config error, or an install that carries
@@ -77,7 +89,7 @@ never fail. No Dockerfile parsing.**
 
    | Check | Source | Report |
    |---|---|---|
-   | Berth version stamp and Berth-file drift | `.devcontainer/` in the Host checkout; billet's side is the installed package's own copy of `templates/workspace/` (force-included into the wheel, read through `importlib.resources`, never a repo path) | the stamp: `ok`, or a `warn` reading `behind by N`, `ahead (upgrade billet)` for a consumer newer than a stale install, or `unknown` when `berth.version` is missing. Then per copied file (`dev-entrypoint.sh`, `sshd.conf`, `authorized_keys-stub`): `ok`; `warn: <file> missing` when the file is absent; or `warn: <file> directive drift (N lines)` followed by a unified diff of the *normalized* lines, capped at 20 lines with `… (M more)`. The **directive hash** is ADR-0012 item 5 with its 2026-09-29 clarification: fold continuations, strip each line, drop blank lines, drop lines starting `#`. The two merged snippets (`Dockerfile.snippet`, `docker-compose.snippet.yml`) are not checked, and the report says so in one line: a snippet-subset check would false-positive on everything ADR-0003 grandfathered |
+   | Berth version stamp and Berth-file drift | `.devcontainer/` in the Host checkout; billet's side is the installed package's own copy of `templates/workspace/` (force-included into the wheel, read through `importlib.resources`, never a repo path) | the stamp: `ok`, or a `warn` reading `behind by N`, `ahead (upgrade billet)` for a consumer newer than a stale install, or `unknown` when `berth.version` is missing. Then per copied file (`dev-entrypoint.sh`, `sshd.conf`, `authorized_keys-stub`): `ok`; `warn: <file> missing` when the file is absent; or `warn: <file> directive drift (N lines)` followed by a unified diff of the *normalized* lines, capped at 20 lines with `… (M more)`. One unit counts throughout (*2026-09-30*): the changed line, `+` or `-`. `N`, the 20-line cap and `M` all count changed lines only, so the changed lines shown plus `M` equal `N`; the bare `@@` separator printed between hunks is not counted. The **directive hash** is ADR-0012 item 5 with its 2026-09-29 clarification: fold continuations, strip each line, drop blank lines, drop lines starting `#`. The two merged snippets (`Dockerfile.snippet`, `docker-compose.snippet.yml`) are not checked, and the report says so in one line: a snippet-subset check would false-positive on everything ADR-0003 grandfathered |
    | Runtime and Locker ownership (in effect 2026-09-29) | the entrypoint's own log (`docker logs` of the service's running container): its `berth=N` line and the ADR-0013 repair lines. Only the current run counts: a restarted container keeps its log, so the report reads from the last `berth=` line on. `doctor` never execs into a container | the running Berth against the checkout's stamp: `ok: running berth=N`, or a `warn` reading `running berth=N, checkout stamp M` (also for `berth=unknown` or a missing stamp) or `running berth not logged`. Each `repaired` line: `ok (repaired at start): <path> (was <owner>:<group> <mode>)`. Each `warning:` or `WARNING:` line: `warn:` and the entrypoint's own text, such as `warn: <path> owned by uid <n>; not repaired`. Other entrypoint lines (`created …`, `skipping …`) are informational and not printed. A stopped container: `skipped: not running`. A Workspace whose `devcontainer.json` cannot be read or parsed, or whose `docker compose ps` or `docker logs` fails: `skipped: runtime unreadable (<reason>)`. *Accepted limitation:* ownership that changes after start is not seen; nothing in the fleet does that |
 
    The report header names the installed billet's version and the Berth version it ships.
@@ -133,19 +145,27 @@ never fail. No Dockerfile parsing.**
                            Berth compare; imports only contracts
                          + WorkspaceManager.doctor(): groups Workspaces by Host, one probe each
    billet.access         + SshDoctorAccess — the DoctorAccess seam: one sectioned probe per Host,
-                           reads then runtime over one SSH session
+                           reads then runtime over one SSH session, under a 30 s
+                           deadline, every marker carrying a per-run nonce
+                         + compose_script — the devcontainer.json parser, compose prelude and
+                           running-service ps SshDoctorAccess shares with
+                           ComposeContainerAccess; the one access module another imports
                          + packaged_berth — the shipped Berth, through importlib.resources
    billet.contracts      + DoctorAccess (Protocol); BerthStatus, BerthFileStatus, StampStatus,
                            RuntimeReport, PackagedBerth, WorkspaceBerthRead,
                            WorkspaceRuntimeRead, WorkspaceProbe, DoctorReport (frozen dataclasses)
    billet.infrastructure + ConversationRunner — one process whose stdin script is written in two
-                           parts, the second computed from the first part's output
+                           parts, the second computed from the first part's output; a
+                           timeout kills and reaps it (ProcessTimeoutError), and so
+                           does any error mid-conversation
    ```
 
    `DoctorAccess` is its own seam rather than a method on `ContainerAccess`: it has one caller
    and a different session shape (one probe per Host, not a call per Workspace). An import-linter
    contract forbids `billet.workspace.engine` from importing `access`, `host`, `infrastructure`,
-   `cli` or the manager, so the engine does no I/O by construction.
+   `cli` or the manager, so the engine does no I/O by construction. Two more (2026-09-30) keep
+   the access modules independent of one another, with `compose_script` as the one shared
+   leaf, which imports no other access module.
 
    `read_image_lockers()` from the research is **not** added: after ADR-0013 the shared image
    publishes no Locker set, so there is no label to read. A Berth-version label is a matter for

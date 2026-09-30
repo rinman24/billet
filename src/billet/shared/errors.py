@@ -15,6 +15,14 @@ class ConfigError(BilletError):
     """The config.toml is missing, malformed, or fails validation."""
 
 
+class PackagedBerthMissing(ConfigError):
+    """The installed billet carries no packaged Berth (an editable checkout, not a wheel).
+
+    Its message already names the fix (``uv build``, then run from the wheel), so the CLI
+    renders the message alone, without the "edit it, then retry" a config error ends with.
+    """
+
+
 class AzLoginRequired(BilletError):
     """The Azure CLI has no usable control-plane token; the operator must ``az login``."""
 
@@ -32,3 +40,15 @@ class ProcessError(BilletError):
         self.stderr = stderr
         command = " ".join(self.argv)
         super().__init__(f"command failed (exit {returncode}): {command}\n{stderr}".rstrip())
+
+
+class ProcessTimeoutError(ProcessError):
+    """An external command was killed for exceeding its deadline.
+
+    A killed process has no meaningful exit status, so ``returncode`` is the sentinel ``-1``
+    and ``timeout`` (seconds) is what callers key on — never the message text.
+    """
+
+    def __init__(self, argv: Sequence[str], timeout: float) -> None:
+        self.timeout = timeout
+        super().__init__(argv, -1, f"timed out after {timeout:g}s")

@@ -7,6 +7,7 @@ temporary home — the second through the real ``SubprocessRunner.converse`` wit
 shell without touching any Host.
 """
 
+from collections.abc import Callable, Sequence
 import os
 from pathlib import Path
 import re
@@ -16,24 +17,26 @@ import subprocess
 import pytest
 
 from billet.access.doctor.ssh_doctor_access import (
-    MISSING_MARKER,
-    NOT_RUNNING,
-    READS_DONE,
-    RUNTIME_FAILED,
+    ProbeMarkers,
     SshDoctorAccess,
     parse_probe_output,
     read_facts,
     reads_script,
     runtime_script,
 )
-from billet.contracts import DevcontainerFacts, RuntimeState, WorkspaceSpec
-from billet.infrastructure.process import SubprocessRunner
-from billet.shared.errors import HostOperationError, ProcessError
+from billet.contracts import BerthFileState, DevcontainerFacts, RuntimeState, WorkspaceSpec
+from billet.infrastructure.process import CompletedProcess, SubprocessRunner
+from billet.shared.errors import HostOperationError, ProcessError, ProcessTimeoutError
+from billet.workspace.engine import berth_policy
 from tests.unit._fakes import FakeProcessRunner, completed, make_remote_host, make_workspace_spec
 
 REMOTE = make_remote_host()
 GSWA = make_workspace_spec()
 BRAND = make_workspace_spec(key="genshift-brand", repo_dir="genshift-brand")
+
+# Recorded-output tests use one fixed nonce (D-A7-5); a real probe draws a fresh one per run.
+_M = ProbeMarkers("0123456789abcdef")
+_N = _M.nonce
 
 _DEVCONTAINER_JSON = """\
 {
@@ -49,43 +52,43 @@ _DEVCONTAINER_JSON = """\
 # genshift-brand lacks sshd.conf, its berth.version has no trailing newline (the extra `echo`
 # keeps the next marker whole), and its container is stopped.
 _RECORDED = f"""\
-===head:gswa-backend===
+===head:gswa-backend@{_N}===
 d223cd5
-===file:gswa-backend:berth.version===
+===file:gswa-backend:berth.version@{_N}===
 1
 
-===file:gswa-backend:dev-entrypoint.sh===
+===file:gswa-backend:dev-entrypoint.sh@{_N}===
 #!/usr/bin/env bash
   set -euo pipefail
 
-===file:gswa-backend:sshd.conf===
+===file:gswa-backend:sshd.conf@{_N}===
 Port 22
 
-===file:gswa-backend:authorized_keys-stub===
+===file:gswa-backend:authorized_keys-stub@{_N}===
 # stub
 
-===facts:gswa-backend===
+===facts:gswa-backend@{_N}===
 {_DEVCONTAINER_JSON % ("gswa-backend", "gswa-backend")}
-===head:genshift-brand===
-{MISSING_MARKER}
-===file:genshift-brand:berth.version===
+===head:genshift-brand@{_N}===
+{_M.missing}
+===file:genshift-brand:berth.version@{_N}===
 2
-===file:genshift-brand:dev-entrypoint.sh===
+===file:genshift-brand:dev-entrypoint.sh@{_N}===
 exec sleep infinity
 
-===file:genshift-brand:sshd.conf===
-{MISSING_MARKER}
-===file:genshift-brand:authorized_keys-stub===
-{MISSING_MARKER}
-===facts:genshift-brand===
+===file:genshift-brand:sshd.conf@{_N}===
+{_M.missing}
+===file:genshift-brand:authorized_keys-stub@{_N}===
+{_M.missing}
+===facts:genshift-brand@{_N}===
 {_DEVCONTAINER_JSON % ("genshift-brand", "genshift-brand")}
-{READS_DONE}
-===runtime:gswa-backend===
-running 3f2a9c1d
+{_M.reads_done}
+===runtime:gswa-backend@{_N}===
+{_M.running}3f2a9c1d
 dev-entrypoint: berth=1
 dev-entrypoint: publishing the container environment to /etc/environment for sshd login shells
-===runtime:genshift-brand===
-{NOT_RUNNING}
+===runtime:genshift-brand@{_N}===
+{_M.not_running}
 """
 
 
@@ -93,7 +96,7 @@ def _access(
     stdout: str = _RECORDED, returncode: int = 0
 ) -> tuple[SshDoctorAccess, FakeProcessRunner]:
     runner = FakeProcessRunner(lambda _argv: completed(stdout=stdout, returncode=returncode))
-    return SshDoctorAccess(runner), runner
+    return SshDoctorAccess(runner, new_markers=lambda: _M), runner
 
 
 def test_one_ssh_invocation_covers_every_workspace_on_the_host() -> None:
@@ -112,8 +115,22 @@ def test_the_probe_is_batch_mode_bash_on_stdin_without_agent_forwarding() -> Non
     assert "BatchMode=yes" in argv
     assert "-A" not in argv and "-t" not in argv
     assert "azureuser@20.0.0.5" in argv
-    facts = read_facts(_RECORDED, [GSWA])
-    assert runner.inputs[0] == reads_script([GSWA]) + runtime_script([GSWA], REMOTE, facts)
+    facts = read_facts(_RECORDED, [GSWA], _M)
+    assert runner.inputs[0] == reads_script([GSWA], _M) + runtime_script([GSWA], REMOTE, facts, _M)
+    assert runner.timeouts == [30]  # the per-Host deadline over the whole conversation
+
+
+def test_the_probe_argv_bounds_the_connect_and_a_dead_link() -> None:
+    """D-A7-2: keepalives end a dead link as ssh exit 255 in ~15 s, inside the deadline."""
+    access, runner = _access()
+    access.probe(REMOTE, [GSWA])
+    options = {v for k, v in zip(runner.calls[0], runner.calls[0][1:], strict=False) if k == "-o"}
+    assert {
+        "ConnectTimeout=5",
+        "BatchMode=yes",
+        "ServerAliveInterval=5",
+        "ServerAliveCountMax=3",
+    } <= options
 
 
 def _commands(script: str) -> set[str]:
@@ -130,7 +147,7 @@ def _commands(script: str) -> set[str]:
 
 
 def test_the_reads_part_runs_only_cat_and_git_rev_parse() -> None:
-    script = reads_script([GSWA, BRAND])
+    script = reads_script([GSWA, BRAND], _M)
     assert _commands(script) == {"set", "echo", "git", "cat"}
     git_lines = [line for line in script.splitlines() if "git " in line]
     assert len(git_lines) == 2
@@ -152,7 +169,7 @@ def _facts(service: str) -> DevcontainerFacts:
 
 def test_the_runtime_part_runs_only_compose_ps_and_docker_logs_never_exec() -> None:
     facts = {"gswa-backend": _facts("gswa-backend"), "genshift-brand": _facts("genshift-brand")}
-    script = runtime_script([GSWA, BRAND], REMOTE, facts)
+    script = runtime_script([GSWA, BRAND], REMOTE, facts, _M)
     assert _commands(script) == {"set", "cd", "export", "echo", "exit", "docker", "grep", "true"}
     docker = [m.group(0) for m in re.finditer(r"docker \S+ ?\S*", script)]
     assert docker and all(d.startswith(("docker compose -f", "docker logs ")) for d in docker)
@@ -163,7 +180,7 @@ def test_the_runtime_part_runs_only_compose_ps_and_docker_logs_never_exec() -> N
 
 def test_the_ps_names_the_service_under_the_compose_prelude() -> None:
     """D18: Workspaces sharing compose project `devcontainer` stay apart by service."""
-    script = runtime_script([GSWA], REMOTE, {"gswa-backend": _facts("gswa-backend")})
+    script = runtime_script([GSWA], REMOTE, {"gswa-backend": _facts("gswa-backend")}, _M)
     assert "cd gswa-backend\n" in script
     assert "export BILLET_CONTAINER_SSH_PORT=" in script
     assert (
@@ -174,12 +191,12 @@ def test_the_ps_names_the_service_under_the_compose_prelude() -> None:
 
 
 def test_a_workspace_whose_facts_do_not_parse_gets_no_runtime_part() -> None:
-    script = runtime_script([GSWA], REMOTE, {"gswa-backend": "devcontainer.json missing"})
+    script = runtime_script([GSWA], REMOTE, {"gswa-backend": "devcontainer.json missing"}, _M)
     assert script == ""
 
 
 def test_parse_recorded_output_including_missing_files_and_a_non_checkout() -> None:
-    gswa, brand = parse_probe_output(_RECORDED, [GSWA, BRAND])
+    gswa, brand = parse_probe_output(_RECORDED, [GSWA, BRAND], _M)
     files = gswa.berth.files
     assert gswa.berth.head == "d223cd5"
     assert files["berth.version"] is not None and files["berth.version"].strip() == "1"
@@ -191,7 +208,7 @@ def test_parse_recorded_output_including_missing_files_and_a_non_checkout() -> N
 
 
 def test_parse_the_runtime_sections() -> None:
-    gswa, brand = parse_probe_output(_RECORDED, [GSWA, BRAND])
+    gswa, brand = parse_probe_output(_RECORDED, [GSWA, BRAND], _M)
     assert gswa.runtime.state is RuntimeState.RUNNING
     assert gswa.runtime.log_lines == (
         "dev-entrypoint: berth=1",
@@ -203,22 +220,22 @@ def test_parse_the_runtime_sections() -> None:
 
 
 def test_a_failed_runtime_probe_or_missing_devcontainer_json_is_unreadable() -> None:
-    failed = _RECORDED.replace(NOT_RUNNING, RUNTIME_FAILED)
-    _, brand = parse_probe_output(failed, [GSWA, BRAND])
+    failed = _RECORDED.replace(_M.not_running, _M.runtime_failed)
+    _, brand = parse_probe_output(failed, [GSWA, BRAND], _M)
     assert brand.runtime.state is RuntimeState.UNREADABLE
     assert brand.runtime.reason == "docker compose ps or docker logs failed"
-    (read,) = parse_probe_output("", [GSWA])
+    (read,) = parse_probe_output("", [GSWA], _M)
     assert read.runtime.state is RuntimeState.UNREADABLE
     assert read.runtime.reason == ".devcontainer/devcontainer.json missing"
 
 
 def test_an_invalid_devcontainer_json_is_unreadable_with_the_parse_error() -> None:
-    text = "===facts:gswa-backend===\n{ not json\n"
-    assert "invalid devcontainer.json" in str(read_facts(text, [GSWA])["gswa-backend"])
+    text = f"===facts:gswa-backend@{_N}===\n{{ not json\n"
+    assert "invalid devcontainer.json" in str(read_facts(text, [GSWA], _M)["gswa-backend"])
 
 
 def test_a_section_absent_from_the_output_reads_as_missing() -> None:
-    (probe,) = parse_probe_output("", [GSWA])
+    (probe,) = parse_probe_output("", [GSWA], _M)
     assert probe.berth.head is None
     assert set(probe.berth.files.values()) == {None}
 
@@ -226,6 +243,15 @@ def test_a_section_absent_from_the_output_reads_as_missing() -> None:
 def test_ssh_transport_failure_is_host_unreachable() -> None:
     access, _ = _access(stdout="", returncode=255)
     with pytest.raises(HostOperationError, match="could not reach 20.0.0.5"):
+        access.probe(REMOTE, [GSWA])
+
+
+def test_a_probe_past_its_deadline_raises_the_typed_timeout() -> None:
+    def _hang(argv: list[str]) -> CompletedProcess:
+        raise ProcessTimeoutError(argv, 30)
+
+    access = SshDoctorAccess(FakeProcessRunner(_hang))
+    with pytest.raises(ProcessTimeoutError):
         access.probe(REMOTE, [GSWA])
 
 
@@ -252,14 +278,14 @@ def test_the_reads_script_runs_under_a_real_bash(tmp_path: Path) -> None:
     )
     result = subprocess.run(
         ["bash", "-se"],
-        input=reads_script([GSWA, BRAND]),
+        input=reads_script([GSWA, BRAND], _M),
         capture_output=True,
         text=True,
         cwd=tmp_path,
         check=True,
     )
-    assert result.stdout.splitlines()[-1] == READS_DONE
-    gswa, brand = parse_probe_output(result.stdout, [GSWA, BRAND])
+    assert result.stdout.splitlines()[-1] == _M.reads_done
+    gswa, brand = parse_probe_output(result.stdout, [GSWA, BRAND], _M)
     assert gswa.berth.head is not None and re.fullmatch(r"[0-9a-f]{7,}", gswa.berth.head)
     assert (gswa.berth.files["berth.version"] or "").strip() == "1"
     assert (gswa.berth.files["sshd.conf"] or "").strip() == "Port 22"
@@ -288,9 +314,23 @@ esac
 """
 
 
-def test_the_whole_conversation_runs_under_a_real_bash(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+_EXPECTED_DOCKER_CALLS = [
+    "compose -f .devcontainer/docker-compose.yml ps --status running -q gswa-backend",
+    "logs aaa111",
+    "compose -f .devcontainer/docker-compose.yml ps --status running -q billet",
+    "compose -f .devcontainer/docker-compose.yml ps --status running -q squadra",
+]
+
+
+def _stub_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    extra: dict[str, dict[str, str]] | None = None,
+) -> tuple[list[WorkspaceSpec], Path]:
+    """Put the stub ``docker`` on PATH and three checkouts under ``tmp_path``; return both.
+
+    ``extra`` maps a Workspace key to more ``.devcontainer/`` files for its checkout.
+    """
     bindir = tmp_path / "bin"
     bindir.mkdir()
     docker = bindir / "docker"
@@ -302,18 +342,26 @@ def test_the_whole_conversation_runs_under_a_real_bash(
     specs: list[WorkspaceSpec] = []
     for key in ("gswa-backend", "billet", "squadra"):
         repo = tmp_path / key
-        _git_checkout(repo, {"devcontainer.json": _DEVCONTAINER_JSON % (key, key)})
+        files = {"devcontainer.json": _DEVCONTAINER_JSON % (key, key), **(extra or {}).get(key, {})}
+        _git_checkout(repo, files)
         specs.append(make_workspace_spec(key=key, repo_dir=str(repo)))
+    return specs, argv_log
+
+
+def test_the_whole_conversation_runs_under_a_real_bash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    specs, argv_log = _stub_host(tmp_path, monkeypatch)
 
     result = SubprocessRunner().converse(
         ["bash", "-se"],
-        opening=reads_script(specs),
-        sentinel=READS_DONE,
-        reply=lambda out: runtime_script(specs, REMOTE, read_facts(out, specs)),
+        opening=reads_script(specs, _M),
+        sentinel=_M.reads_done,
+        reply=lambda out: runtime_script(specs, REMOTE, read_facts(out, specs, _M), _M),
     )
 
     assert result.returncode == 0, result.stderr
-    gswa, billet, squadra = parse_probe_output(result.stdout, specs)
+    gswa, billet, squadra = parse_probe_output(result.stdout, specs, _M)
     assert gswa.runtime.state is RuntimeState.RUNNING
     assert gswa.runtime.log_lines == (
         "dev-entrypoint: berth=1",
@@ -322,10 +370,69 @@ def test_the_whole_conversation_runs_under_a_real_bash(
     )
     assert billet.runtime.state is RuntimeState.NOT_RUNNING
     assert squadra.runtime.state is RuntimeState.UNREADABLE
-    calls = argv_log.read_text().splitlines()
-    assert calls == [
-        "compose -f .devcontainer/docker-compose.yml ps --status running -q gswa-backend",
-        "logs aaa111",
-        "compose -f .devcontainer/docker-compose.yml ps --status running -q billet",
-        "compose -f .devcontainer/docker-compose.yml ps --status running -q squadra",
-    ]
+    assert argv_log.read_text().splitlines() == _EXPECTED_DOCKER_CALLS
+
+
+# --- the nonce: a consumer line shaped like a marker stays file content (D-A7-5) ---------
+
+
+def test_each_probe_run_draws_a_fresh_random_nonce() -> None:
+    runner = FakeProcessRunner(lambda _argv: completed())
+    access = SshDoctorAccess(runner)  # the default: a fresh nonce per run
+    access.probe(REMOTE, [GSWA])
+    access.probe(REMOTE, [GSWA])
+    nonces = [re.findall(r"@([0-9a-f]{16})===", text or "") for text in runner.inputs]
+    assert all(found and len(set(found)) == 1 for found in nonces)  # one nonce per run
+    assert nonces[0][0] != nonces[1][0]
+
+
+class _LocalBash:
+    """A ConversationRunner that runs the probe on a local ``bash -se`` instead of ssh."""
+
+    def converse(
+        self,
+        argv: Sequence[str],
+        *,
+        opening: str,
+        sentinel: str,
+        reply: Callable[[str], str],
+        timeout: float | None = None,
+    ) -> CompletedProcess:
+        return SubprocessRunner().converse(
+            ["bash", "-se"], opening=opening, sentinel=sentinel, reply=reply, timeout=timeout
+        )
+
+
+# Every line after the shebang looks like a marker of the pre-nonce probe: a section header,
+# the old reads sentinel (which fired the runtime part early), the old missing marker, and a
+# later Workspace's runtime header with its "not running" line.
+_SPOOFING_ENTRYPOINT = """#!/usr/bin/env bash
+===head:x===
+===doctor:reads-done===
+===missing===
+===runtime:billet===
+not running
+exec sleep infinity
+"""
+
+
+def test_marker_shaped_consumer_lines_are_file_content_and_spoof_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    specs, argv_log = _stub_host(
+        tmp_path, monkeypatch, extra={"gswa-backend": {"dev-entrypoint.sh": _SPOOFING_ENTRYPOINT}}
+    )
+
+    gswa, billet, squadra = SshDoctorAccess(_LocalBash()).probe(REMOTE, specs)
+
+    read = gswa.berth.files["dev-entrypoint.sh"]
+    assert read is not None and read.rstrip("\n") == _SPOOFING_ENTRYPOINT.rstrip("\n")
+    status = berth_policy.compare_file("dev-entrypoint.sh", _SPOOFING_ENTRYPOINT, read)
+    assert status.state is BerthFileState.OK  # no false drift
+    assert gswa.berth.head is not None and re.fullmatch(r"[0-9a-f]{7,}", gswa.berth.head)
+    # The reply fired on the real sentinel, so every Workspace after gswa-backend has its
+    # runtime part, and billet's comes from docker, not from the spoofed "not running".
+    assert gswa.runtime.state is RuntimeState.RUNNING
+    assert billet.runtime.state is RuntimeState.NOT_RUNNING
+    assert squadra.runtime.state is RuntimeState.UNREADABLE
+    assert argv_log.read_text().splitlines() == _EXPECTED_DOCKER_CALLS

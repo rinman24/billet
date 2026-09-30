@@ -37,7 +37,7 @@ from billet.access.doctor.packaged_berth import (
     read_packaged_berth,
 )
 from billet.contracts import BERTH_COPIED_FILES
-from billet.shared.errors import ConfigError
+from billet.shared.errors import PackagedBerthMissing
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PYPROJECT = _REPO_ROOT / "pyproject.toml"
@@ -154,5 +154,5 @@ def test_without_a_packaged_berth_the_resolver_names_the_fix() -> None:
     # rather than fall back to a repo path (D-A4-1).
     if berth_resource_root().is_dir():
         pytest.skip("this interpreter has a packaged Berth (a wheel install)")
-    with pytest.raises(ConfigError, match="uv build"):
+    with pytest.raises(PackagedBerthMissing, match="uv build"):
         read_packaged_berth()

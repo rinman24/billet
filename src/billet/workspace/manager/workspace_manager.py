@@ -37,7 +37,7 @@ from billet.contracts import (
     WorkspaceStepKind,
 )
 from billet.infrastructure import ssh
-from billet.shared.errors import BilletError, HostOperationError
+from billet.shared.errors import BilletError, HostOperationError, ProcessTimeoutError
 from billet.workspace.engine import berth_policy, runtime_policy
 from billet.workspace.engine.placement import HostPlacementPolicy
 from billet.workspace.engine.port_allocator import PortAllocator
@@ -329,8 +329,9 @@ class WorkspaceManager:
 
         Workspaces are grouped by Host and each Host is probed exactly once (ADR-0015 item 1,
         D-A4-10). ``filters`` narrow the selection. A Host that cannot be reached over SSH is
-        reported as skipped and never started (D-A4-9); any other probe fault skips that Host
-        with its message, so one bad Host never hides the rest. Each Workspace's runtime is
+        reported as skipped and never started (D-A4-9); a probe that outlives its deadline is
+        skipped as timed out (D-A7-3); any other probe fault skips that Host with its message,
+        so one bad Host never hides the rest. Each Workspace's runtime is
         read from its entrypoint's log and its running Berth compared with the checkout's
         stamp (D-A4-8). ``doctor`` never mutates.
         """
@@ -350,6 +351,10 @@ class WorkspaceManager:
                 probes = self._doctor.probe(members[0][1], specs)
             except HostOperationError:
                 skipped.append(DoctorSkip(host=host, reason="unreachable", workspaces=keys))
+                continue
+            except ProcessTimeoutError as exc:
+                reason = f"probe timed out after {exc.timeout:g}s"
+                skipped.append(DoctorSkip(host=host, reason=reason, workspaces=keys))
                 continue
             except BilletError as exc:
                 reason = f"probe failed: {_first_line(exc)}"

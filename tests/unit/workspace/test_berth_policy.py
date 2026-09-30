@@ -159,6 +159,29 @@ def test_more_than_twenty_differing_lines_is_capped() -> None:
     assert status.diff_more == 30 - DIFF_CAP
 
 
+def test_the_cap_counts_changed_lines_only_across_many_hunks() -> None:
+    """D-A7-8: shown changed + M = N; the `@@` separators count in neither."""
+    shipped = "".join(f"line {n}\n" for n in range(40))
+    # Every fourth line differs: 10 one-line hunks, 20 changed lines, 9 separators.
+    consumer = "".join(f"LINE {n}\n" if n % 4 == 0 else f"line {n}\n" for n in range(40))
+    extra = "".join(f"echo extra {n}\n" for n in range(5))  # one more hunk of 5 additions
+    status = compare_file("dev-entrypoint.sh", shipped, consumer + extra)
+    assert status.changed_lines == 25
+    shown_changed = [line for line in status.diff if line != "@@"]
+    assert len(shown_changed) == DIFF_CAP
+    assert "@@" in status.diff and status.diff[-1] != "@@"
+    assert len(shown_changed) + status.diff_more == status.changed_lines
+    assert status.diff_more == 5
+
+
+def test_cap_diff_keeps_separators_between_shown_hunks_but_none_trailing() -> None:
+    lines = ["-a", "+A", "@@", "-b", "+B", "@@", "-c"]
+    assert cap_diff(lines, cap=4) == (("-a", "+A", "@@", "-b", "+B"), 1)
+    assert cap_diff(lines, cap=2) == (("-a", "+A"), 3)
+    assert cap_diff(lines) == (tuple(lines), 0)
+    assert cap_diff(["-a", "@@"]) == (("-a",), 0)  # no separator after the last shown line
+
+
 def test_separate_hunks_are_separated_by_a_bare_marker() -> None:
     shipped = "a\nb\nc\nd\ne\n"
     status = compare_file("sshd.conf", shipped, "A\nb\nc\nd\nE\n")

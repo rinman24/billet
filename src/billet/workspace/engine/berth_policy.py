@@ -33,7 +33,9 @@ from billet.contracts import (
     WorkspaceBerthRead,
 )
 
-#: At most this many diff lines are reported per drifted file (D-A4-11).
+#: At most this many changed (``+``/``-``) lines are reported per drifted file (D-A4-11).
+#: The one diff unit is the changed line (D-A7-8): the ``(N lines)`` count, this cap and the
+#: ``… (M more)`` remainder all count only ``+``/``-`` lines, so shown + M = N always.
 DIFF_CAP = 20
 
 _CONTINUATION = "\\"
@@ -90,15 +92,34 @@ def compare_file(name: str, shipped: str, consumer: str | None) -> BerthFileStat
         return BerthFileStatus(name, BerthFileState.OK)
     body = _normalized_diff(normalize(shipped), normalize(consumer))
     changed = sum(1 for line in body if line != _HUNK_MARKER)
-    shown, more = cap_diff(body)
+    shown, more = cap_diff(body)  # shown's changed lines + more == changed
     return BerthFileStatus(
         name, BerthFileState.DRIFT, changed_lines=changed, diff=shown, diff_more=more
     )
 
 
 def cap_diff(lines: Sequence[str], cap: int = DIFF_CAP) -> tuple[tuple[str, ...], int]:
-    """Return at most ``cap`` of ``lines`` and how many were withheld."""
-    return tuple(lines[:cap]), max(0, len(lines) - cap)
+    """Return ``lines`` through the ``cap``-th changed line, and how many changed lines follow.
+
+    Only ``+``/``-`` lines count (D-A7-8). A bare ``@@`` separator is kept between hunks
+    inside the shown part and never counted, and none is left dangling after the last shown
+    line, so the shown changed lines plus the withheld count equal the diff's changed lines.
+    """
+    shown: list[str] = []
+    kept = 0
+    for line in lines:
+        if line == _HUNK_MARKER:
+            if kept < cap:
+                shown.append(line)
+            continue
+        if kept == cap:
+            break
+        shown.append(line)
+        kept += 1
+    if shown and shown[-1] == _HUNK_MARKER:
+        shown.pop()
+    changed = sum(1 for line in lines if line != _HUNK_MARKER)
+    return tuple(shown), changed - kept
 
 
 def assess(

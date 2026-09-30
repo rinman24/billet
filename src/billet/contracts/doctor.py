@@ -61,8 +61,9 @@ class BerthFileStatus:
     """One directive-hashed Berth file's result for one Workspace.
 
     ``diff`` is the unified diff of the *normalized* lines (billet's copy ``-``, the
-    Workspace's ``+``), already capped; ``diff_more`` counts the lines the cap withheld.
-    ``changed_lines`` is the number of added plus removed normalized lines.
+    Workspace's ``+``), already capped, with a bare ``@@`` between hunks. ``changed_lines``
+    is the number of added plus removed normalized lines, and ``diff_more`` counts the
+    changed lines the cap withheld; ``@@`` separators count in neither (D-A7-8).
     """
 
     file: str
@@ -222,6 +223,7 @@ class DoctorAccess(Protocol):
     ) -> tuple[WorkspaceProbe, ...]:
         """Probe ``remote`` once and return one probe per spec, in ``specs`` order.
 
-        Raises ``HostOperationError`` when the Host cannot be reached over SSH.
+        Raises ``HostOperationError`` when the Host cannot be reached over SSH, and
+        ``ProcessTimeoutError`` when the probe outlives its deadline.
         """
         ...

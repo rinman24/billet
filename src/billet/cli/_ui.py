@@ -52,6 +52,7 @@ from billet.shared.errors import (
     BilletError,
     ConfigError,
     HostOperationError,
+    PackagedBerthMissing,
     ProcessError,
 )
 
@@ -248,7 +249,8 @@ def _error_view(exc: BilletError) -> tuple[str, Group | None]:
         return _process_error_view(exc)
     if isinstance(exc, ConfigError):
         lines = [Text(f"  {line}", style="meta") for line in str(exc).splitlines()]
-        lines.append(Text("  edit it, then retry"))
+        if not isinstance(exc, PackagedBerthMissing):  # its message already names the fix
+            lines.append(Text("  edit it, then retry"))
         return "config error", Group(*lines)
     if isinstance(exc, HostOperationError):
         # The message is verbatim manager copy that already suggests the fix; the first
@@ -792,7 +794,8 @@ def render_doctor(
     """Render ``billet doctor``: glyph gutters and color on a tty, plain lines when piped.
 
     A drifted file prints ``warn: <file> directive drift (N lines)`` and then the capped
-    unified diff of its *normalized* lines. The runtime lines follow each Workspace's files:
+    unified diff of its *normalized* lines; ``N``, the cap and ``… (M more)`` count changed
+    (``+``/``-``) lines only, never the ``@@`` separators between hunks. The runtime lines follow each Workspace's files:
     ``ok: running berth=N`` (or ``warn: running berth=N, checkout stamp M``), then
     ``ok (repaired at start): …`` and ``warn: …`` per entrypoint repair and warning, or
     ``skipped: not running``. The report is informational: callers exit 0.
