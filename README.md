@@ -121,7 +121,8 @@ billet stop gswa-backend         # stop the container (non-destructive)
 with the Berth the *installed* billet ships: the `berth.version` stamp, and
 `dev-entrypoint.sh`, `sshd.conf` and `authorized_keys-stub` by directive hash (comments and
 whitespace ignored). It reads over one SSH session per Host, shows each checkout's short HEAD,
-skips an unreachable Host without starting it, and always exits 0
+skips an unreachable Host without starting it, reports a Host whose probe outlasts 30 s as
+timed out, and always exits 0
 ([ADR-0015](docs/adr/adr-0015-billet-doctor.md)). The templates ship inside the wheel, so run
 it from an installed billet; an editable checkout (`uv run`) does not carry them.
 

@@ -794,7 +794,8 @@ def render_doctor(
     """Render ``billet doctor``: glyph gutters and color on a tty, plain lines when piped.
 
     A drifted file prints ``warn: <file> directive drift (N lines)`` and then the capped
-    unified diff of its *normalized* lines. The runtime lines follow each Workspace's files:
+    unified diff of its *normalized* lines; ``N``, the cap and ``… (M more)`` count changed
+    (``+``/``-``) lines only, never the ``@@`` separators between hunks. The runtime lines follow each Workspace's files:
     ``ok: running berth=N`` (or ``warn: running berth=N, checkout stamp M``), then
     ``ok (repaired at start): …`` and ``warn: …`` per entrypoint repair and warning, or
     ``skipped: not running``. The report is informational: callers exit 0.
