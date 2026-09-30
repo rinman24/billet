@@ -160,3 +160,37 @@ forbidden_modules = [
     "billet.access",
     "billet.infrastructure",
 ]
+
+# ResourceAccess modules are peers (ADR-0001): one access module never reaches into another.
+# `compose_script` is the one shared leaf — the devcontainer.json parser, the compose prelude
+# and the running-service ps that `start` and `doctor` must agree on — so it is left out of the
+# independence set (both container and doctor access import it) and kept a leaf by the
+# forbidden contract below.
+[[tool.importlinter.contracts]]
+name = "access modules are independent (compose_script is the shared leaf)"
+type = "independence"
+modules = [
+    "billet.access.container.compose_container_access",
+    "billet.access.doctor",
+    "billet.access.host",
+    "billet.access.metrics",
+    "billet.access.registry",
+    "billet.access.secret",
+    "billet.access.source",
+    "billet.access.sshconfig",
+]
+
+[[tool.importlinter.contracts]]
+name = "the shared compose_script leaf imports no other access module"
+type = "forbidden"
+source_modules = ["billet.access.container.compose_script"]
+forbidden_modules = [
+    "billet.access.container.compose_container_access",
+    "billet.access.doctor",
+    "billet.access.host",
+    "billet.access.metrics",
+    "billet.access.registry",
+    "billet.access.secret",
+    "billet.access.source",
+    "billet.access.sshconfig",
+]

@@ -30,7 +30,7 @@ from collections.abc import Mapping, Sequence
 import posixpath
 import shlex
 
-from billet.access.container.compose_container_access import (
+from billet.access.container.compose_script import (
     DEVCONTAINER_JSON,
     compose_prelude,
     facts_from_json,

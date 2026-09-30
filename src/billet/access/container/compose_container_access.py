@@ -16,17 +16,18 @@ once needed is unnecessary here.
 
 import posixpath
 import shlex
-from typing import Any, cast
 
+from billet.access.container.compose_script import (
+    DEVCONTAINER_JSON,
+    compose_file_flags,
+    compose_prelude,
+    facts_from_json,
+    running_ps_command,
+)
 from billet.contracts import DevcontainerFacts, RemoteHost, WorkspaceSpec
 from billet.infrastructure import ssh
 from billet.infrastructure.process import OnLine, ProcessRunner
-from billet.shared import jsonc
 from billet.shared.errors import ConfigError, HostOperationError, ProcessError
-
-#: The data contract billet reads, relative to a Workspace's ``repo_dir`` on the Host.
-DEVCONTAINER_JSON = ".devcontainer/devcontainer.json"
-_DEVCONTAINER_DIR = ".devcontainer"
 
 # Bound connection establishment only (never command runtime): a deallocated Azure host
 # drops inbound packets, so an untimed probe would hang `billet ls` indefinitely.
@@ -35,70 +36,6 @@ _SSH_CONNECT_TIMEOUT = 5
 # ssh(1) reserves exit 255 for its own failures (connect/auth); remote commands never
 # produce it, so it cleanly separates "host unreachable" from "command failed on host".
 _SSH_TRANSPORT_RC = 255
-
-
-def _as_str_list(value: Any, what: str) -> list[str]:
-    """Coerce a JSON string-or-array value to a list of strings, or raise."""
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list):
-        items: list[str] = []
-        for item in cast("list[object]", value):
-            if not isinstance(item, str):
-                raise ConfigError(f"devcontainer.json: '{what}' entries must be strings")
-            items.append(item)
-        return items
-    raise ConfigError(f"devcontainer.json: '{what}' must be a string or array of strings")
-
-
-def _normalize_compose_files(value: Any) -> tuple[str, ...]:
-    """Normalize ``dockerComposeFile`` (str or list) to repo-root-relative paths.
-
-    devcontainer.json declares the path(s) relative to the ``.devcontainer/`` folder; compose
-    is invoked from the repo root, so each is re-rooted under ``.devcontainer/``.
-    """
-    raw = _as_str_list(value, "dockerComposeFile")
-    if not raw:
-        raise ConfigError("devcontainer.json: 'dockerComposeFile' is empty")
-    return tuple(posixpath.normpath(posixpath.join(_DEVCONTAINER_DIR, item)) for item in raw)
-
-
-def _normalize_post_create(value: Any) -> str | None:
-    """Normalize ``postCreateCommand`` (str / list / absent) to a single shell string."""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        return shlex.join(_as_str_list(value, "postCreateCommand"))
-    raise ConfigError(
-        "devcontainer.json: object form of 'postCreateCommand' is not yet supported; "
-        "use a string or array"
-    )
-
-
-def facts_from_json(text: str, path: str) -> DevcontainerFacts:
-    """Parse ``devcontainer.json`` text (JSONC) read from ``path`` into :class:`DevcontainerFacts`.
-
-    The one parser of the data contract: ``read_facts`` and ``doctor``'s probe both use it,
-    so the service and compose files ``doctor`` names are the ones ``start`` drives.
-    """
-    try:
-        data = jsonc.loads(text)
-    except ValueError as exc:
-        raise ConfigError(f"invalid devcontainer.json at {path}: {exc}") from exc
-    if "dockerComposeFile" not in data:
-        raise ConfigError(f"{path}: missing 'dockerComposeFile' (billet drives compose)")
-    for key in ("service", "workspaceFolder", "remoteUser"):
-        if not isinstance(data.get(key), str):
-            raise ConfigError(f"{path}: missing or non-string '{key}'")
-    return DevcontainerFacts(
-        service=data["service"],
-        compose_files=_normalize_compose_files(data["dockerComposeFile"]),
-        workspace_folder=data["workspaceFolder"],
-        remote_user=data["remoteUser"],
-        post_create_command=_normalize_post_create(data.get("postCreateCommand")),
-    )
 
 
 class ComposeContainerAccess:
@@ -215,7 +152,7 @@ class ComposeContainerAccess:
     ) -> None:
         """Stop the compose stack (non-destructive — named volumes/data persist)."""
         self._run_script(
-            remote, compose_prelude(spec, remote) + compose_command(facts, "stop") + "\n"
+            remote, compose_prelude(spec, remote) + _compose_command(facts, "stop") + "\n"
         )
 
     def is_running(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> bool:
@@ -257,7 +194,7 @@ class ComposeContainerAccess:
             "JSON\n"
             "fi\n"
         )
-        build = compose_command(facts, "up", "-d", "--build") + "\n"
+        build = _compose_command(facts, "up", "-d", "--build") + "\n"
         inject = _claude_token_injection(facts, claude_oauth_token) if claude_oauth_token else ""
         return prelude + agent_teams + build + inject
 
@@ -265,7 +202,7 @@ class ComposeContainerAccess:
     def _exec_script(
         spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts, command: str
     ) -> str:
-        exec_cmd = compose_command(
+        exec_cmd = _compose_command(
             facts, "exec", "-T", shlex.quote(facts.service), "bash", "-lc", shlex.quote(command)
         )
         return compose_prelude(spec, remote) + exec_cmd + "\n"
@@ -319,46 +256,9 @@ def _assert_transport_ok(returncode: int, remote: RemoteHost) -> None:
         )
 
 
-def compose_prelude(spec: WorkspaceSpec, remote: RemoteHost) -> str:
-    """Shared remote-script header: fail-fast, cd into the repo, export billet's variables.
-
-    Both ``BILLET_*`` variables the Workspace templates interpolate are exported before
-    every ``docker compose`` invocation, so the repo's compose needs no ``.env`` on the Host.
-    ``BILLET_CONTAINER_SSH_PORT`` lets the compose bind its sshd to billet's assigned
-    loopback port (``127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-2222}:22``, ADR-0003).
-    ``BILLET_AUTHORIZED_KEYS`` names the Host admin user's ``authorized_keys`` so the
-    container's sshd trusts the same key that opens the Host
-    (``${BILLET_AUTHORIZED_KEYS:-./authorized_keys-stub}``). The admin user is the one this
-    script already ssh's in as (``RemoteHost.admin_user``) — no new lookup. A shell export
-    outranks compose's ``.env`` interpolation, which is what makes a stale ``.env`` left on
-    a Host inert.
-    """
-    return (
-        "set -euo pipefail\n"
-        f"cd {shlex.quote(spec.repo_dir)}\n"
-        f"export BILLET_CONTAINER_SSH_PORT={spec.container_ssh_port}\n"
-        f"export BILLET_AUTHORIZED_KEYS={shlex.quote(_authorized_keys_path(remote))}\n"
-    )
-
-
-def running_ps_command(facts: DevcontainerFacts) -> str:
-    """Build the ``docker compose ps`` that prints the running container id of the service.
-
-    Scoped by service name (never by compose project), so Workspaces that share a compose
-    project name on one Host stay apart (D18). ``is_running`` and ``doctor`` both use it.
-    """
-    return compose_command(facts, "ps", "--status", "running", "-q", shlex.quote(facts.service))
-
-
-def _authorized_keys_path(remote: RemoteHost) -> str:
-    """Build the Host admin user's ``authorized_keys`` path — the file the container's sshd trusts."""
-    return posixpath.join("/home", remote.admin_user, ".ssh", "authorized_keys")
-
-
-def compose_command(facts: DevcontainerFacts, *args: str) -> str:
+def _compose_command(facts: DevcontainerFacts, *args: str) -> str:
     """Build a ``docker compose -f … <args>`` command with each compose file quoted."""
-    files = " ".join(f"-f {shlex.quote(path)}" for path in facts.compose_files)
-    return f"docker compose {files} {' '.join(args)}".strip()
+    return f"docker compose {compose_file_flags(facts)} {' '.join(args)}".strip()
 
 
 # The heredoc delimiter that carries the merge program (and the token literal) as STDIN.
@@ -517,7 +417,7 @@ def _claude_token_injection(facts: DevcontainerFacts, token: str) -> str:
     appears in **no** argv (world-readable via ``ps``/``/proc``) at any hop.
     """
     program = build_claude_merge_program(token)
-    exec_cmd = compose_command(
+    exec_cmd = _compose_command(
         facts,
         "exec",
         "-T",
