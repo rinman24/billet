@@ -16,6 +16,9 @@ from billet.shared.errors import ProcessError
 # docker/BuildKit write build progress to stderr, so a stdout-only tail would be blank.
 OnLine = Callable[[str], None]
 
+# Builds the second part of a two-part stdin script from the stdout the first part produced.
+Reply = Callable[[str], str]
+
 # Sentinel returncode reported when a run is killed for exceeding its timeout — a killed
 # process has no meaningful exit status, so callers key on the raised ProcessError instead.
 _TIMEOUT_RC = -1
@@ -56,8 +59,31 @@ class ProcessRunner(Protocol):
         ...
 
 
+class ConversationRunner(Protocol):
+    """Runs one command whose stdin script is written in two parts, the second computed.
+
+    One process, one session: the caller sends an opening script, reads what it printed up
+    to an agreed sentinel line, and only then decides what to send next. ``billet doctor``
+    uses it to read ``devcontainer.json`` and then query the service it names over the same
+    SSH session (ADR-0015 item 1).
+    """
+
+    def converse(
+        self, argv: Sequence[str], *, opening: str, sentinel: str, reply: Reply
+    ) -> CompletedProcess:
+        """Run ``argv`` with stdin held open across two writes; never raise on exit status.
+
+        Writes ``opening``, reads stdout until a line equal to ``sentinel``, writes
+        ``reply(<stdout so far>)``, closes stdin and collects the rest. If stdout ends before
+        the sentinel (the command died, or ssh never connected), ``reply`` is not called.
+        The result's stdout is everything printed, sentinel line included; the caller
+        interprets the exit status.
+        """
+        ...
+
+
 class SubprocessRunner:
-    """A :class:`ProcessRunner` backed by :mod:`subprocess`."""
+    """A :class:`ProcessRunner` and :class:`ConversationRunner` backed by :mod:`subprocess`."""
 
     def run(
         self,
@@ -95,6 +121,60 @@ class SubprocessRunner:
         if check and proc.returncode != 0:
             raise ProcessError(result.argv, result.returncode, result.stderr)
         return result
+
+    def converse(
+        self, argv: Sequence[str], *, opening: str, sentinel: str, reply: Reply
+    ) -> CompletedProcess:
+        """Run ``argv`` with a two-part stdin script (see :class:`ConversationRunner`)."""
+        proc = subprocess.Popen(
+            list(argv),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+        stderr_lines: list[str] = []
+        drain = threading.Thread(target=_collect, args=(proc.stderr, stderr_lines), daemon=True)
+        drain.start()
+        stdout_lines: list[str] = []
+        open_ = _send(proc.stdin, opening)
+        reached = False
+        # readline, not iteration: the loop stops mid-stream and resumes after the reply.
+        while line := proc.stdout.readline():
+            stdout_lines.append(line)
+            if line.rstrip("\n") == sentinel:
+                reached = True
+                break
+        if reached and open_:
+            _send(proc.stdin, reply("".join(stdout_lines)))
+        try:
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass  # the command already exited; its exit status decides
+        stdout_lines.extend(proc.stdout.readlines())
+        drain.join()
+        return CompletedProcess(
+            argv=tuple(argv),
+            returncode=proc.wait(),
+            stdout="".join(stdout_lines),
+            stderr="".join(stderr_lines),
+        )
+
+
+def _send(stdin: IO[str], text: str) -> bool:
+    """Write and flush ``text``; return ``False`` if the command has stopped reading."""
+    try:
+        stdin.write(text)
+        stdin.flush()
+    except BrokenPipeError:
+        return False
+    return True
+
+
+def _collect(stream: IO[str], sink: list[str]) -> None:
+    """Drain one pipe into ``sink`` so the other cannot deadlock behind it."""
+    sink.extend(stream)
 
 
 def _pump(stream: IO[str], sink: list[str], on_line: OnLine) -> None:

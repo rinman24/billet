@@ -36,6 +36,9 @@ from billet.contracts import (
     HostSpec,
     Plan,
     PlanStep,
+    RunningBerthState,
+    RuntimeReport,
+    RuntimeState,
     StampState,
     StampStatus,
     StepKind,
@@ -379,7 +382,7 @@ _COMMAND_SURFACE: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
             ("stop <key>", "stop the compose stack"),
             ("connect <key>", "ssh in and attach to tmux"),
             ("ls", "list berths — running · stopped · open"),
-            ("doctor", "report berth drift against this billet"),
+            ("doctor", "report berth drift and runtime state"),
             ("ssh-config", "write ~/.ssh/config.d/billet.conf"),
             ("rm <key>", "how to deregister"),
         ),
@@ -656,8 +659,8 @@ def render_ls_json(groups: Sequence[LsHostGroup], console: Console | None = None
 
 # --- doctor view (ADR-0015) -------------------------------------------------------------
 
-# Each report line is (depth, verdict, text): verdict "ok" / "warn" / "skip" leads the line,
-# "diff" is a normalized diff line, "" is a heading or note. The tty and piped renderers
+# Each report line is (depth, verdict, text): verdict "ok" / "warn" / "skip" / "repaired"
+# leads the line, "diff" is a normalized diff line, "" is a heading or note. The tty and piped renderers
 # share this list, so the words are identical and only the gutter and color differ.
 _DoctorLine = tuple[int, str, str]
 
@@ -696,6 +699,34 @@ def _file_lines(status: BerthFileStatus) -> list[_DoctorLine]:
     return lines
 
 
+def _running_berth_line(runtime: RuntimeReport) -> _DoctorLine:
+    if runtime.berth_state is RunningBerthState.NOT_LOGGED:
+        return (2, "warn", "running berth not logged")
+    running = f"running berth={runtime.running_berth}"
+    if runtime.berth_state is RunningBerthState.MATCH:
+        return (2, "ok", running)
+    stamp = "unknown" if runtime.checkout_stamp is None else str(runtime.checkout_stamp)
+    return (2, "warn", f"{running}, checkout stamp {stamp}")
+
+
+def _runtime_lines(runtime: RuntimeReport) -> list[_DoctorLine]:
+    """Build the runtime section (D-A4-8): running Berth, each repair, each warning."""
+    if runtime.state is RuntimeState.NOT_RUNNING:
+        return [(2, "skip", "not running")]
+    if runtime.state is RuntimeState.UNREADABLE:
+        return [(2, "skip", f"runtime unreadable ({runtime.reason})")]
+    lines = [_running_berth_line(runtime)]
+    lines.extend((2, "repaired", text) for text in runtime.repaired)
+    lines.extend((2, "warn", text) for text in runtime.warnings)
+    return lines
+
+
+def _runtime_warnings(runtime: RuntimeReport | None) -> int:
+    if runtime is None or runtime.state is not RuntimeState.RUNNING:
+        return 0
+    return (runtime.berth_state is not RunningBerthState.MATCH) + len(runtime.warnings)
+
+
 def doctor_lines(report: DoctorReport, billet_version: str) -> list[_DoctorLine]:
     """Build the ``doctor`` report as ordered ``(depth, verdict, text)`` lines."""
     hashed = ", ".join(BERTH_HASHED_FILES)
@@ -722,16 +753,19 @@ def doctor_lines(report: DoctorReport, billet_version: str) -> list[_DoctorLine]
         lines.append((2, *_stamp_line(status.stamp)))
         for file_status in status.files:
             lines.extend(_file_lines(file_status))
+        if status.runtime is not None:
+            lines.extend(_runtime_lines(status.runtime))
     for skip in report.skipped:
         lines.append((0, "skip", f"host {skip.host} {skip.reason} ({', '.join(skip.workspaces)})"))
     return lines
 
 
 def doctor_warning_count(report: DoctorReport) -> int:
-    """Count the ``warn`` lines of a report (the stamp plus each non-ok file)."""
+    """Count the ``warn`` lines of a report: stamp, each non-ok file, and the runtime's."""
     return sum(
         (status.stamp.state is not StampState.OK)
         + sum(f.state is not BerthFileState.OK for f in status.files)
+        + _runtime_warnings(status.runtime)
         for status in report.statuses
     )
 
@@ -740,6 +774,7 @@ _DOCTOR_VERDICT: dict[str, tuple[str, str]] = {
     "ok": ("ok", "done"),
     "warn": ("warn", "caution"),
     "skip": ("skipped", "caution"),
+    "repaired": ("ok (repaired at start)", "done"),
 }
 
 
@@ -757,7 +792,10 @@ def render_doctor(
     """Render ``billet doctor``: glyph gutters and color on a tty, plain lines when piped.
 
     A drifted file prints ``warn: <file> directive drift (N lines)`` and then the capped
-    unified diff of its *normalized* lines. The report is informational: callers exit 0.
+    unified diff of its *normalized* lines. The runtime lines follow each Workspace's files:
+    ``ok: running berth=N`` (or ``warn: running berth=N, checkout stamp M``), then
+    ``ok (repaired at start): …`` and ``warn: …`` per entrypoint repair and warning, or
+    ``skipped: not running``. The report is informational: callers exit 0.
     """
     out = console if console is not None else get_console()
     plain = not out.is_terminal

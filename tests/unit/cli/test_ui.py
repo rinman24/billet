@@ -34,6 +34,9 @@ from billet.contracts import (
     HostPowerState,
     Plan,
     PlanStep,
+    RunningBerthState,
+    RuntimeReport,
+    RuntimeState,
     StampState,
     StampStatus,
     StepKind,
@@ -816,3 +819,74 @@ def test_render_doctor_on_a_terminal_uses_the_same_words() -> None:
     text = console.export_text()
     assert "warn: dev-entrypoint.sh directive drift (26 lines)" in text
     assert "skipped: host fleet unreachable" in text
+
+
+def _runtime_status(workspace: str, runtime: RuntimeReport) -> BerthStatus:
+    return BerthStatus(
+        workspace=workspace,
+        host="devbox",
+        repo_dir=workspace,
+        head="b8464f2",
+        stamp=StampStatus(StampState.OK, shipped=1, found=1),
+        files=(),
+        runtime=runtime,
+    )
+
+
+def _runtime_report() -> DoctorReport:
+    repaired = RuntimeReport(
+        state=RuntimeState.RUNNING,
+        checkout_stamp=1,
+        running_berth="1",
+        berth_state=RunningBerthState.MATCH,
+        repaired=("/home/dev/.claude (was root:root 755)",),
+        warnings=("/home/dev/.cache owned by uid 1001; not repaired",),
+        notes=("skipping AZURE_CLIENT_SECRET (credential; never published to …)",),
+    )
+    differs = RuntimeReport(
+        state=RuntimeState.RUNNING,
+        checkout_stamp=1,
+        running_berth="2",
+        berth_state=RunningBerthState.DIFFERS,
+    )
+    unlogged = RuntimeReport(
+        state=RuntimeState.RUNNING, checkout_stamp=1, berth_state=RunningBerthState.NOT_LOGGED
+    )
+    stopped = RuntimeReport(state=RuntimeState.NOT_RUNNING, checkout_stamp=1)
+    unreadable = RuntimeReport(
+        state=RuntimeState.UNREADABLE, checkout_stamp=1, reason="docker compose ps failed"
+    )
+    return DoctorReport(
+        berth_version=1,
+        statuses=(
+            _runtime_status("gswa-backend", repaired),
+            _runtime_status("billet", differs),
+            _runtime_status("squadra", unlogged),
+            _runtime_status("genshift-brand", stopped),
+            _runtime_status("other", unreadable),
+        ),
+        skipped=(),
+    )
+
+
+def test_render_doctor_runtime_lines_plain() -> None:
+    console, buffer = _plain_console()
+    _ui.render_doctor(_runtime_report(), "0.4.0", console=console)
+    lines = buffer.getvalue().splitlines()
+    assert "    ok: running berth=1" in lines
+    assert "    ok (repaired at start): /home/dev/.claude (was root:root 755)" in lines
+    assert "    warn: /home/dev/.cache owned by uid 1001; not repaired" in lines
+    assert "    warn: running berth=2, checkout stamp 1" in lines
+    assert "    warn: running berth not logged" in lines
+    assert "    skipped: not running" in lines
+    assert "    skipped: runtime unreadable (docker compose ps failed)" in lines
+    assert not any("skipping AZURE_CLIENT_SECRET" in line for line in lines)  # informational
+    assert lines[-1] == "· 3 warnings across 5 workspaces"
+
+
+def test_render_doctor_runtime_on_a_terminal_uses_the_same_words() -> None:
+    console = _terminal_console()
+    _ui.render_doctor(_runtime_report(), "0.4.0", console=console)
+    text = console.export_text()
+    assert "ok (repaired at start): /home/dev/.claude (was root:root 755)" in text
+    assert "skipped: not running" in text

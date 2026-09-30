@@ -24,7 +24,8 @@ from billet.infrastructure.process import OnLine, ProcessRunner
 from billet.shared import jsonc
 from billet.shared.errors import ConfigError, HostOperationError, ProcessError
 
-_DEVCONTAINER_REL = ".devcontainer/devcontainer.json"
+#: The data contract billet reads, relative to a Workspace's ``repo_dir`` on the Host.
+DEVCONTAINER_JSON = ".devcontainer/devcontainer.json"
 _DEVCONTAINER_DIR = ".devcontainer"
 
 # Bound connection establishment only (never command runtime): a deallocated Azure host
@@ -76,6 +77,30 @@ def _normalize_post_create(value: Any) -> str | None:
     )
 
 
+def facts_from_json(text: str, path: str) -> DevcontainerFacts:
+    """Parse ``devcontainer.json`` text (JSONC) read from ``path`` into :class:`DevcontainerFacts`.
+
+    The one parser of the data contract: ``read_facts`` and ``doctor``'s probe both use it,
+    so the service and compose files ``doctor`` names are the ones ``start`` drives.
+    """
+    try:
+        data = jsonc.loads(text)
+    except ValueError as exc:
+        raise ConfigError(f"invalid devcontainer.json at {path}: {exc}") from exc
+    if "dockerComposeFile" not in data:
+        raise ConfigError(f"{path}: missing 'dockerComposeFile' (billet drives compose)")
+    for key in ("service", "workspaceFolder", "remoteUser"):
+        if not isinstance(data.get(key), str):
+            raise ConfigError(f"{path}: missing or non-string '{key}'")
+    return DevcontainerFacts(
+        service=data["service"],
+        compose_files=_normalize_compose_files(data["dockerComposeFile"]),
+        workspace_folder=data["workspaceFolder"],
+        remote_user=data["remoteUser"],
+        post_create_command=_normalize_post_create(data.get("postCreateCommand")),
+    )
+
+
 class ComposeContainerAccess:
     """A ``ContainerAccess`` over ``docker compose`` on the Host via SSH.
 
@@ -92,7 +117,7 @@ class ComposeContainerAccess:
 
     def read_facts(self, spec: WorkspaceSpec, remote: RemoteHost) -> DevcontainerFacts:
         """Read + parse ``<repo_dir>/.devcontainer/devcontainer.json`` on the host."""
-        path = posixpath.join(spec.repo_dir, _DEVCONTAINER_REL)
+        path = posixpath.join(spec.repo_dir, DEVCONTAINER_JSON)
         argv = ssh.ssh_argv(
             remote.admin_user,
             remote.ip,
@@ -107,26 +132,7 @@ class ComposeContainerAccess:
                 f"could not read {path} on {remote.ip} — is the repo cloned? "
                 "Run `billet start` to clone it first."
             )
-        return self._facts_from_json(result.stdout, path)
-
-    @staticmethod
-    def _facts_from_json(text: str, path: str) -> DevcontainerFacts:
-        try:
-            data = jsonc.loads(text)
-        except ValueError as exc:
-            raise ConfigError(f"invalid devcontainer.json at {path}: {exc}") from exc
-        if "dockerComposeFile" not in data:
-            raise ConfigError(f"{path}: missing 'dockerComposeFile' (billet drives compose)")
-        for key in ("service", "workspaceFolder", "remoteUser"):
-            if not isinstance(data.get(key), str):
-                raise ConfigError(f"{path}: missing or non-string '{key}'")
-        return DevcontainerFacts(
-            service=data["service"],
-            compose_files=_normalize_compose_files(data["dockerComposeFile"]),
-            workspace_folder=data["workspaceFolder"],
-            remote_user=data["remoteUser"],
-            post_create_command=_normalize_post_create(data.get("postCreateCommand")),
-        )
+        return facts_from_json(result.stdout, path)
 
     # --- driving the stack ---------------------------------------------------------
 
@@ -208,12 +214,13 @@ class ComposeContainerAccess:
         self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts
     ) -> None:
         """Stop the compose stack (non-destructive — named volumes/data persist)."""
-        self._run_script(remote, _prelude(spec, remote) + _compose_cmd(facts, "stop") + "\n")
+        self._run_script(
+            remote, compose_prelude(spec, remote) + compose_command(facts, "stop") + "\n"
+        )
 
     def is_running(self, spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts) -> bool:
         """Return whether the service container is currently running."""
-        ps = _compose_cmd(facts, "ps", "--status", "running", "-q", shlex.quote(facts.service))
-        script = _prelude(spec, remote) + ps + "\n"
+        script = compose_prelude(spec, remote) + running_ps_command(facts) + "\n"
         argv = _script_argv(remote)
         result = self._runner.run(argv, input_text=script, check=False)
         _assert_transport_ok(result.returncode, remote)
@@ -232,7 +239,7 @@ class ComposeContainerAccess:
         claude_oauth_token: str | None = None,
     ) -> str:
         prelude = (
-            _prelude(spec, remote)
+            compose_prelude(spec, remote)
             + f"HOST_BOOTSTRAP_CMD={shlex.quote(spec.host_bootstrap_cmd)}\n"
             + 'eval "$HOST_BOOTSTRAP_CMD"\n'
             + f"AGENT_TEAMS_FLAG={shlex.quote(spec.agent_teams_flag)}\n"
@@ -250,7 +257,7 @@ class ComposeContainerAccess:
             "JSON\n"
             "fi\n"
         )
-        build = _compose_cmd(facts, "up", "-d", "--build") + "\n"
+        build = compose_command(facts, "up", "-d", "--build") + "\n"
         inject = _claude_token_injection(facts, claude_oauth_token) if claude_oauth_token else ""
         return prelude + agent_teams + build + inject
 
@@ -258,10 +265,10 @@ class ComposeContainerAccess:
     def _exec_script(
         spec: WorkspaceSpec, remote: RemoteHost, facts: DevcontainerFacts, command: str
     ) -> str:
-        exec_cmd = _compose_cmd(
+        exec_cmd = compose_command(
             facts, "exec", "-T", shlex.quote(facts.service), "bash", "-lc", shlex.quote(command)
         )
-        return _prelude(spec, remote) + exec_cmd + "\n"
+        return compose_prelude(spec, remote) + exec_cmd + "\n"
 
     @staticmethod
     def _personal_bootstrap_script(
@@ -312,7 +319,7 @@ def _assert_transport_ok(returncode: int, remote: RemoteHost) -> None:
         )
 
 
-def _prelude(spec: WorkspaceSpec, remote: RemoteHost) -> str:
+def compose_prelude(spec: WorkspaceSpec, remote: RemoteHost) -> str:
     """Shared remote-script header: fail-fast, cd into the repo, export billet's variables.
 
     Both ``BILLET_*`` variables the Workspace templates interpolate are exported before
@@ -334,12 +341,21 @@ def _prelude(spec: WorkspaceSpec, remote: RemoteHost) -> str:
     )
 
 
+def running_ps_command(facts: DevcontainerFacts) -> str:
+    """Build the ``docker compose ps`` that prints the running container id of the service.
+
+    Scoped by service name (never by compose project), so Workspaces that share a compose
+    project name on one Host stay apart (D18). ``is_running`` and ``doctor`` both use it.
+    """
+    return compose_command(facts, "ps", "--status", "running", "-q", shlex.quote(facts.service))
+
+
 def _authorized_keys_path(remote: RemoteHost) -> str:
     """Build the Host admin user's ``authorized_keys`` path — the file the container's sshd trusts."""
     return posixpath.join("/home", remote.admin_user, ".ssh", "authorized_keys")
 
 
-def _compose_cmd(facts: DevcontainerFacts, *args: str) -> str:
+def compose_command(facts: DevcontainerFacts, *args: str) -> str:
     """Build a ``docker compose -f … <args>`` command with each compose file quoted."""
     files = " ".join(f"-f {shlex.quote(path)}" for path in facts.compose_files)
     return f"docker compose {files} {' '.join(args)}".strip()
@@ -501,7 +517,7 @@ def _claude_token_injection(facts: DevcontainerFacts, token: str) -> str:
     appears in **no** argv (world-readable via ``ps``/``/proc``) at any hop.
     """
     program = build_claude_merge_program(token)
-    exec_cmd = _compose_cmd(
+    exec_cmd = compose_command(
         facts,
         "exec",
         "-T",

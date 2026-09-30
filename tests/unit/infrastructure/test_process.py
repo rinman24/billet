@@ -55,3 +55,36 @@ def test_runner_streaming_raises_process_error_with_captured_stderr() -> None:
     assert exc_info.value.returncode == 3
     assert "boom" in exc_info.value.stderr
     assert "boom" in lines
+
+
+# --- converse: a two-part stdin script over one process -------------------------------
+
+
+def test_converse_sends_the_reply_computed_from_the_output_up_to_the_sentinel() -> None:
+    seen: list[str] = []
+
+    def reply(out: str) -> str:
+        seen.append(out)
+        return f"echo got {len(out.splitlines())}\n"
+
+    result = SubprocessRunner().converse(
+        ["bash", "-se"], opening="echo one\necho END\n", sentinel="END", reply=reply
+    )
+    assert seen == ["one\nEND\n"]
+    assert result.stdout == "one\nEND\ngot 2\n"
+    assert result.returncode == 0
+    assert result.argv == ("bash", "-se")
+
+
+def test_converse_skips_the_reply_when_the_command_ends_before_the_sentinel() -> None:
+    called: list[str] = []
+    result = SubprocessRunner().converse(
+        ["bash", "-c", "echo partial; echo oops >&2; exit 3"],
+        opening="",
+        sentinel="END",
+        reply=lambda out: called.append(out) or "",
+    )
+    assert called == []
+    assert result.returncode == 3  # never raises: the caller reads the status
+    assert result.stdout == "partial\n"
+    assert result.stderr == "oops\n"
