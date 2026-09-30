@@ -8,9 +8,14 @@ replays into every ``billet connect`` login shell.
 The script is sourced with ``BILLET_ENTRYPOINT_SOURCE_ONLY=1`` — its documented test seam,
 which defines the function and returns before any container-only work (sudo, ssh-keygen,
 sshd). ``BILLET_ENV_FILE`` redirects the "existing file" it merges onto a temp path.
+
+From Berth 2 the snapshot withholds credential-shaped variables, by name or by value, unless
+the consumer lists them in ``BILLET_ENV_PUBLISH`` (ADR-0003 amendment 2026-09-30). Every
+value in these tests is an obviously fake dummy.
 """
 
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 import os
 from pathlib import Path
 import shlex
@@ -206,6 +211,302 @@ def test_block_contents_are_sorted_for_a_stable_diff(tmp_path: Path) -> None:
     assert rendered.block == sorted(rendered.block)
     assert rendered.block.index('ALPHA="1"') < rendered.block.index('MIKE="1"')
     assert rendered.block.index('MIKE="1"') < rendered.block.index('ZULU="1"')
+
+
+# --- Berth 2: the credential backstop -------------------------------------------------
+
+
+def _withholding_line(name: str) -> str:
+    """The exact stderr line the entrypoint logs for one withheld name (never the value)."""
+    return (
+        f"dev-entrypoint: withholding {name} "
+        "(looks like a credential; list it in BILLET_ENV_PUBLISH to publish)"
+    )
+
+
+def _withheld(rendered: Rendered) -> set[str]:
+    """The names the render logged as withheld."""
+    prefix = "dev-entrypoint: withholding "
+    return {
+        line.removeprefix(prefix).split(" ", 1)[0]
+        for line in rendered.stderr.splitlines()
+        if line.startswith(prefix)
+    }
+
+
+def _assert_withheld(rendered: Rendered, name: str, value: str) -> None:
+    """``name`` is absent from the block, logged exactly once, and its value appears nowhere."""
+    assert rendered.value_of(name) is None
+    assert rendered.stderr.splitlines().count(_withholding_line(name)) == 1
+    if value:  # the empty string is "in" every string
+        assert value not in rendered.stderr
+        assert value not in "\n".join(rendered.block)
+
+
+#: One name per D-D17-8 name glob, each matching that glob and no other.
+_CREDENTIAL_NAMES = [
+    ("*TOKEN*", "GITHUB_TOKEN"),
+    ("*SECRET*", "APP_SECRET"),
+    ("*PASSWORD*", "DB_PASSWORD"),
+    ("*PASSWD*", "DB_PASSWD"),
+    ("*_PASS", "SMTP_PASS"),
+    ("*PASSPHRASE*", "SIGNING_PASSPHRASE"),
+    ("*CREDENTIAL*", "AZURE_CREDENTIALS"),
+    ("*API_KEY*", "SERVICE_API_KEY_FILE"),
+    ("*ACCESS_KEY*", "AWS_ACCESS_KEY_ID"),
+    ("*PRIVATE_KEY*", "SSH_PRIVATE_KEY_PATH"),
+    ("*_KEY", "STRIPE_KEY"),
+    ("*_PAT", "AZURE_DEVOPS_EXT_PAT"),
+]
+
+
+def test_each_parametrised_name_matches_only_its_own_glob() -> None:
+    # Keeps the per-glob test honest: were one glob dropped from the script, its name
+    # could not be carried to withholding by a neighbouring glob.
+    globs = [glob for glob, _ in _CREDENTIAL_NAMES]
+    for glob, name in _CREDENTIAL_NAMES:
+        assert [g for g in globs if fnmatchcase(name, g)] == [glob], name
+
+
+@pytest.mark.parametrize(
+    "name", [name for _, name in _CREDENTIAL_NAMES], ids=[glob for glob, _ in _CREDENTIAL_NAMES]
+)
+def test_each_credential_name_glob_withholds(name: str, tmp_path: Path) -> None:
+    value = "dummy-not-a-real-credential"
+    rendered = _render(tmp_path, {name: value, "KEPT": "fine"})
+    _assert_withheld(rendered, name, value)
+    assert rendered.value_of("KEPT") == '"fine"'
+
+
+@pytest.mark.parametrize("name", ["my_token", "Db_Password", "stripe_key", "ado_pat"])
+def test_name_matching_is_case_insensitive(name: str, tmp_path: Path) -> None:
+    value = "dummy-not-a-real-credential"
+    _assert_withheld(_render(tmp_path, {name: value}), name, value)
+
+
+def test_gpg_key_is_exempt_and_published(tmp_path: Path) -> None:
+    # The python base image's public signing-key id, in every fleet image.
+    rendered = _render(tmp_path, {"GPG_KEY": "0123456789ABCDEF0123456789ABCDEF01234567"})
+    assert rendered.value_of("GPG_KEY") == '"0123456789ABCDEF0123456789ABCDEF01234567"'
+    assert rendered.stderr == ""
+
+
+def test_the_exemption_is_an_exact_name(tmp_path: Path) -> None:
+    value = "dummy-not-a-real-credential"
+    _assert_withheld(_render(tmp_path, {"MY_GPG_KEY": value}), "MY_GPG_KEY", value)
+
+
+def test_the_exemption_covers_the_name_test_only(tmp_path: Path) -> None:
+    value = "https://dummy:dummy-pw@keys.example.invalid/"
+    _assert_withheld(_render(tmp_path, {"GPG_KEY": value}), "GPG_KEY", value)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "AUTHOR",
+        "OAUTH_CLIENT_ID",
+        "KEYBOARD_LAYOUT",
+        "SSH_KEYS_DIR",
+        "BYPASS_CACHE",
+        "TYPST_FONT_PATHS",
+        "COMPASS",
+        "PATTERN",
+    ],
+)
+def test_near_miss_names_are_published(name: str, tmp_path: Path) -> None:
+    rendered = _render(tmp_path, {name: "plain"})
+    assert rendered.value_of(name) == '"plain"'
+    assert rendered.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "postgresql://u:p@h/db",
+        "redis://:p@h:6379",
+        "postgresql+psycopg://dummy:dummy-pw@sql:5432/app",
+    ],
+)
+def test_a_url_carrying_a_password_is_withheld_by_value(value: str, tmp_path: Path) -> None:
+    rendered = _render(tmp_path, {"SERVICE_URL": value})
+    _assert_withheld(rendered, "SERVICE_URL", value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://host:8080/p@x",
+        "https://example.com",
+        "user@host",
+        "redis://h:6379/0",
+        "https://u@h/x",
+    ],
+)
+def test_urls_without_a_password_are_published(value: str, tmp_path: Path) -> None:
+    rendered = _render(tmp_path, {"SERVICE_URL": value})
+    assert rendered.value_of("SERVICE_URL") == f'"{value}"'
+    assert rendered.stderr == ""
+
+
+def test_the_credential_check_runs_before_the_representability_skip(tmp_path: Path) -> None:
+    # A credential with an unrepresentable value is withheld, not "skipped": the log line
+    # tells the operator the one thing BILLET_ENV_PUBLISH can and cannot fix.
+    value = 'dummy"pw'
+    rendered = _render(tmp_path, {"DB_PASSWORD": value})
+    _assert_withheld(rendered, "DB_PASSWORD", value)
+    assert "skipping" not in rendered.stderr
+
+
+def test_a_listed_credential_is_published(tmp_path: Path) -> None:
+    rendered = _render(
+        tmp_path,
+        {
+            "DB_PASSWORD": "dummy-db-pw",
+            "SERVICE_URL": "redis://:dummy-pw@redis:6379/0",
+            "BILLET_ENV_PUBLISH": "DB_PASSWORD SERVICE_URL",
+        },
+    )
+    assert rendered.value_of("DB_PASSWORD") == '"dummy-db-pw"'
+    assert rendered.value_of("SERVICE_URL") == '"redis://:dummy-pw@redis:6379/0"'
+    assert rendered.stderr == ""
+
+
+def test_the_publish_list_is_whitespace_separated(tmp_path: Path) -> None:
+    rendered = _render(
+        tmp_path,
+        {"A_TOKEN": "dummy-a", "B_TOKEN": "dummy-b", "BILLET_ENV_PUBLISH": "  A_TOKEN\t B_TOKEN "},
+    )
+    assert rendered.value_of("A_TOKEN") == '"dummy-a"'
+    assert rendered.value_of("B_TOKEN") == '"dummy-b"'
+
+
+@pytest.mark.parametrize("listed", ["*_TOKEN", "APP", "APP_TOKEN_2", "app_token"])
+def test_the_publish_list_holds_exact_names_not_globs(listed: str, tmp_path: Path) -> None:
+    value = "dummy-not-a-real-credential"
+    rendered = _render(tmp_path, {"APP_TOKEN": value, "BILLET_ENV_PUBLISH": listed})
+    _assert_withheld(rendered, "APP_TOKEN", value)
+
+
+def test_a_listed_excluded_name_stays_excluded_silently(tmp_path: Path) -> None:
+    rendered = _render(tmp_path, {"HOME": "/home/dev", "BILLET_ENV_PUBLISH": "HOME PATH"})
+    assert rendered.value_of("HOME") is None
+    assert rendered.value_of("PATH") is None
+    assert rendered.stderr == ""
+
+
+def test_a_listed_unrepresentable_value_is_still_skipped(tmp_path: Path) -> None:
+    rendered = _render(tmp_path, {"DB_PASSWORD": 'dummy"pw', "BILLET_ENV_PUBLISH": "DB_PASSWORD"})
+    assert rendered.value_of("DB_PASSWORD") is None
+    assert "dev-entrypoint: skipping DB_PASSWORD " in rendered.stderr
+    assert "withholding" not in rendered.stderr
+
+
+@pytest.mark.parametrize("listed", ["", "A_TOKEN", "BILLET_ENV_PUBLISH"])
+def test_billet_env_publish_itself_is_never_published(listed: str, tmp_path: Path) -> None:
+    rendered = _render(tmp_path, {"A_TOKEN": "dummy-a", "BILLET_ENV_PUBLISH": listed})
+    assert rendered.value_of("BILLET_ENV_PUBLISH") is None
+    assert "BILLET_ENV_PUBLISH=" not in rendered.stdout
+
+
+def test_listed_but_unset_and_listed_but_not_credential_names_are_silent(
+    tmp_path: Path,
+) -> None:
+    rendered = _render(
+        tmp_path,
+        {"TYPST_FONT_PATHS": "/workspace/fonts", "BILLET_ENV_PUBLISH": "NOT_SET TYPST_FONT_PATHS"},
+    )
+    assert rendered.value_of("TYPST_FONT_PATHS") == '"/workspace/fonts"'
+    assert rendered.value_of("NOT_SET") is None
+    assert rendered.stderr == ""
+
+
+# --- The fleet, as it stands on 2026-09-30 (D-D17-8's fleet result) ---------------------
+
+#: Image ``ENV`` common to all four images (PATH omitted: the harness supplies the real one,
+#: and it is excluded anyway). Dummy values throughout.
+_IMAGE_BASE = {
+    "LANG": "C.UTF-8",
+    "GPG_KEY": "0123456789ABCDEF0123456789ABCDEF01234567",
+    "PYTHON_VERSION": "3.11.0",
+    "PYTHON_SHA256": "0" * 64,
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PIP_DEFAULT_TIMEOUT": "100",
+    "UV_PYTHON_DOWNLOADS": "never",
+}
+_CLAUDE = {"CLAUDE_CONFIG_DIR": "/home/dev/.claude"}
+_AZ = {"AZURE_CORE_COLLECT_TELEMETRY": "0"}
+
+_FLEET: dict[str, dict[str, str]] = {
+    "billet": {**_IMAGE_BASE, **_AZ, **_CLAUDE},
+    "genshift-brand": {
+        **_IMAGE_BASE,
+        "DISABLE_AUTOUPDATER": "1",
+        **_CLAUDE,
+        "TYPST_FONT_PATHS": "/workspace/fonts",
+    },
+    "squadra": {**_IMAGE_BASE, **_AZ, "UV_LINK_MODE": "copy", **_CLAUDE},
+    "gswa-backend": {
+        **_IMAGE_BASE,
+        **_AZ,
+        "VIRTUAL_ENV": "/workspace/.venv",
+        "UV_PROJECT_ENVIRONMENT": "/workspace/.venv",
+        **_CLAUDE,
+        "REDIS_URL": "redis://:dummy-redis-pw@redis:6379/0",
+        "GSWA_DB_DRIVERNAME": "postgresql+psycopg",
+        "GSWA_DB_HOST": "sql",
+        "GSWA_DB_PORT": "5432",
+        "GSWA_DB_USERNAME": "dummy_user",
+        "GSWA_DB_DATABASE": "dummy_db",
+        "GSWA_DB_PASSWORD": "dummy-db-pw",
+        "GSWA_TEST_DB_URL": "postgresql+psycopg://dummy_user:dummy-db-pw@sql:5432/dummy_test",
+    },
+}
+
+_GSWA_WITHHELD = {"GSWA_DB_PASSWORD", "REDIS_URL", "GSWA_TEST_DB_URL"}
+
+
+@pytest.mark.parametrize(
+    ("workspace", "extra", "withheld"),
+    [
+        ("billet", {}, set[str]()),
+        ("genshift-brand", {}, set[str]()),
+        ("squadra", {}, set[str]()),
+        # Berth 1 squadra compose still carries the PAT line, empty live.
+        ("squadra", {"AZURE_DEVOPS_EXT_PAT": ""}, {"AZURE_DEVOPS_EXT_PAT"}),
+        ("gswa-backend", {}, _GSWA_WITHHELD),
+        (
+            "gswa-backend",
+            {"BILLET_ENV_PUBLISH": "REDIS_URL GSWA_DB_PASSWORD GSWA_TEST_DB_URL"},
+            set[str](),
+        ),
+    ],
+    ids=[
+        "billet",
+        "genshift-brand",
+        "squadra",
+        "squadra-with-pat-line",
+        "gswa-backend",
+        "gswa-backend-opted-in",
+    ],
+)
+def test_the_fleet_withholds_exactly_the_decided_names(
+    workspace: str, extra: dict[str, str], withheld: set[str], tmp_path: Path
+) -> None:
+    env = {**_FLEET[workspace], **extra}
+    rendered = _render(tmp_path, env)
+
+    assert _withheld(rendered) == withheld
+    assert len(rendered.stderr.splitlines()) == len(withheld)  # nothing else is logged
+    for name, value in env.items():
+        if name == "BILLET_ENV_PUBLISH":
+            assert rendered.value_of(name) is None
+        elif name in withheld:
+            _assert_withheld(rendered, name, value)
+        else:
+            assert rendered.value_of(name) == f'"{value}"', name
+    assert rendered.value_of("GPG_KEY") is not None
 
 
 def test_template_and_devcontainer_copy_stay_byte_identical() -> None:
