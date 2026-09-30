@@ -218,10 +218,10 @@ report withheld names.
 - **The file stays `0644 root:root`.** The Workspace is single-user and every `dev` session
   already holds every published value; `0600` would change this ADR's contract and risk
   non-PAM readers for little gain.
-- **Accepted residual.** An opaque token under an innocuous name (say `BUILD_ID` holding one) is still
-  published. "Never compose `environment:`" stays the primary control. A full allow-list was
-  rejected: every consumer would have to list its image `ENV` too, and a forgotten name would
-  silently vanish from ssh sessions, the bug the snapshot exists to fix.
+- **Accepted residual.** An opaque token under an innocuous name (say `BUILD_ID` holding
+  one) is still published. "Never compose `environment:`" stays the primary control. A full
+  allow-list was rejected: every consumer would have to list its image `ENV` too, and a
+  forgotten name would silently vanish from ssh sessions, the bug the snapshot exists to fix.
 
 ### Consequence for consumers
 

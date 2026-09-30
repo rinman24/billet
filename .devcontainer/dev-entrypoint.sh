@@ -133,10 +133,11 @@ render_container_env() {
 # root:root, and the tool whose state it persists cannot write it. The image is the wrong
 # place to guarantee ownership — the entrypoint is the one component present when the
 # mount happens, whoever wrote the Dockerfile — so the ownership is repaired here, at the
-# one moment both the volume and the login user are present. Policy, per target: a directory owned by uid 0 and EMPTY is
-# re-owned to the login user (0700); everything else is reported and left alone, mode
-# included. Never recursive, never `chown -R`, never fatal: sshd is the operator's way in
-# to fix whatever this could not, so starting it always comes first.
+# one moment both the volume and the login user are present. Policy, per target: a
+# directory owned by uid 0 and EMPTY is re-owned to the login user (0700); everything else
+# is reported and left alone, mode included. Never recursive, never `chown -R`, never
+# fatal: sshd is the operator's way in to fix whatever this could not, so starting it
+# always comes first.
 
 # Print the Docker named-volume mount targets under $HOME, one per line, read from a
 # mountinfo(5) file. Field 4 is the mount root — a named volume's is
