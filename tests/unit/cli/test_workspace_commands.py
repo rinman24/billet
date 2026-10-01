@@ -253,17 +253,18 @@ def test_doctor_reports_ok_berth_and_names_the_installed_billet(
 ) -> None:
     doctor = FakeDoctorAccess()
     _install(monkeypatch, doctor=doctor)
+    shipped = make_packaged_berth().version  # the templates' own berth.version
     result = runner.invoke(app, ["doctor", "--config", str(config_file)])
     assert result.exit_code == 0, result.output
     assert f"billet {__version__}" in result.output
-    assert "berth 1" in result.output
+    assert f"berth {shipped}" in result.output
     assert "not checked: Dockerfile.snippet, docker-compose.snippet.yml" in result.output
     assert "gswa-backend" in result.output and "head d223cd5" in result.output
     for line in (
-        "ok: berth.version 1",
+        f"ok: berth.version {shipped}",
         "ok: dev-entrypoint.sh",
         "ok: sshd.conf",
-        "ok: running berth=1",
+        f"ok: running berth={shipped}",
     ):
         assert line in result.output
     assert "warn:" not in result.output

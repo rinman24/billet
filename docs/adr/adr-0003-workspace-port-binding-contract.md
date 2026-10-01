@@ -12,6 +12,11 @@ and the sshd non-inheritance recorded here are unchanged — see
 [Amendment (2026-09-04)](#amendment-2026-09-04-non-secret-container-environment-reaches-login-shells)
 below.
 
+Amended (2026-09-30, Berth 2): the snapshot withholds credential-shaped variables unless the
+consumer lists them in `BILLET_ENV_PUBLISH` — see
+[Amendment (2026-09-30)](#amendment-2026-09-30-credential-shaped-variables-are-withheld-berth-2)
+below.
+
 ## Context
 
 billet reaches each Workspace's container through a distinct loopback port on the shared
@@ -153,3 +158,74 @@ not something billet injects at runtime. An adopted repo therefore gains this be
 when it **re-copies** `dev-entrypoint.sh`; no compose, Dockerfile, or `config.toml` change is
 needed, and a repo that has not re-copied is unaffected. The template README's revision log
 records the change for exactly this reason.
+
+## Amendment (2026-09-30): credential-shaped variables are withheld (Berth 2)
+
+The 2026-09-04 amendment says credentials must never travel through compose `environment:`,
+and nothing enforced it: the entrypoint cannot tell compose `environment:` from image `ENV`,
+so whatever a consumer put there was published into the world-readable snapshot, and the
+fleet had a password and two credential-bearing URLs in it. From Berth 2 the entrypoint
+**fails closed on credential shape**: a variable that looks like a credential is withheld
+from `/etc/environment` unless the consumer names it. Everything else is published exactly
+as before.
+
+### What is withheld
+
+A variable is withheld when its **name** or its **value** looks like a credential.
+
+- **Name.** The name, compared case-insensitively, matches any of `*TOKEN*` `*SECRET*`
+  `*PASSWORD*` `*PASSWD*` `*_PASS` `*PASSPHRASE*` `*CREDENTIAL*` `*API_KEY*` `*ACCESS_KEY*`
+  `*PRIVATE_KEY*` `*_KEY` `*_PAT`. A kit-owned exemption list excepts names that match a glob
+  but are not credentials; it holds only `GPG_KEY`, the python base image's public
+  signing-key id, present in every fleet image. The exemption lifts the name test only.
+- **Value.** The value is a URL whose userinfo carries a password before the first `/`, the
+  bash regex `^[A-Za-z][A-Za-z0-9+.-]*://[^/@:]*:[^/@]*@`. The user part may be empty, so
+  Redis's `redis://:password@host` form is caught; `http://host:8080/p@x`, `user@host` and
+  `https://u@h/x` are not.
+
+The check runs after the `ENV_EXCLUDE` and name-validity rules and before the pam_env
+representability skip, so a credential whose value pam_env could not express anyway is
+reported as withheld, not skipped.
+
+### The opt-in: `BILLET_ENV_PUBLISH`
+
+A consumer that knowingly needs a withheld variable in ssh sessions sets
+`BILLET_ENV_PUBLISH` in its compose `environment:`: space-separated exact names, no globs.
+It overrides the credential check and nothing else. It cannot publish an `ENV_EXCLUDE`
+name, nor a value pam_env cannot express, and `BILLET_ENV_PUBLISH` itself is never
+published. A listed name that is unset, one that is not credential-shaped, and one in
+`ENV_EXCLUDE` are all silent no-ops. A typo cannot pass silently: the real variable stays
+withheld and keeps logging its line.
+
+### The log line
+
+Each withheld name logs one line on the container's stderr, never the value:
+
+```text
+dev-entrypoint: withholding KEY (looks like a credential; list it in BILLET_ENV_PUBLISH to publish)
+```
+
+It lands in `docker compose logs` beside the existing skip warnings. `billet doctor` does not
+report withheld names.
+
+### What does not change
+
+- **Still not a secret channel.** The check is a backstop for a credential put in compose
+  `environment:` by mistake, not a way to carry one. Credentials keep travelling through
+  `~/.claude/settings.json` ([ADR-0006](adr-0006-claude-token-injection.md)). Opting a
+  credential in with `BILLET_ENV_PUBLISH` publishes it to every session, exactly as Berth 1
+  did.
+- **The file stays `0644 root:root`.** The Workspace is single-user and every `dev` session
+  already holds every published value; `0600` would change this ADR's contract and risk
+  non-PAM readers for little gain.
+- **Accepted residual.** An opaque token under an innocuous name (say `BUILD_ID` holding
+  one) is still published. "Never compose `environment:`" stays the primary control. A full
+  allow-list was rejected: every consumer would have to list its image `ENV` too, and a
+  forgotten name would silently vanish from ssh sessions, the bug the snapshot exists to fix.
+
+### Consequence for consumers
+
+As in 2026-09-04, a repo gains this only by re-copying `dev-entrypoint.sh` and
+`berth.version` (Berth 2), and the change goes live on the next fresh container start. A
+repo whose ssh sessions need a withheld variable lists it in `BILLET_ENV_PUBLISH` in the
+same PR. The template README's revision log carries the Berth 2 row.

@@ -24,7 +24,7 @@ the repo's `.devcontainer/devcontainer.json` on the Host
 | `dockerComposeFile` | the compose file(s), resolved relative to `.devcontainer/` |
 | `workspaceFolder` | where `postCreateCommand` / `verify_cmd` run |
 | `remoteUser` | the in-container user `connect` lands as |
-| `postCreateCommand` | the bootstrap run once after a cold `billet start` |
+| `postCreateCommand` | the bootstrap billet runs on every `billet start` |
 
 Everything else the repo's compose stack must provide itself — most importantly a way
 in: `billet connect` reaches the container by SSH via ProxyJump through the Host, so the
@@ -71,6 +71,36 @@ the mechanism and its limits — the file is world-readable, and a value contain
 backslash, or a control character is skipped with a warning). It is not a secret channel:
 credentials keep travelling through `~/.claude/settings.json`
 ([ADR-0006](adr/adr-0006-claude-token-injection.md)), never compose `environment:`.
+
+### Credential-shaped variables are withheld (Berth 2)
+
+From Berth 2 the snapshot is also a backstop for a credential put in compose `environment:`
+anyway: a variable whose name looks like one (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*_KEY`,
+`*_PAT` and the rest of the list in the
+[ADR-0003 amendment](adr/adr-0003-workspace-port-binding-contract.md#amendment-2026-09-30-credential-shaped-variables-are-withheld-berth-2)),
+or whose value is a URL carrying a password (`scheme://user:password@…`), is left out of
+`/etc/environment`. The container log names it, never its value:
+
+```text
+dev-entrypoint: withholding REDIS_URL (looks like a credential; list it in BILLET_ENV_PUBLISH to publish)
+```
+
+The variable is still in the container's own environment (`docker compose exec` sees it);
+only ssh sessions lose it. If they need it — a dev-only database password that tests read
+over ssh, say — list the exact name in `BILLET_ENV_PUBLISH` on the same compose service,
+with a comment saying why:
+
+```yaml
+    environment:
+      # Dev-only values, committed in plaintext by design; tests run over ssh read them.
+      BILLET_ENV_PUBLISH: "REDIS_URL APP_DB_PASSWORD"
+```
+
+Names are space-separated and exact; there are no globs. The list lifts the credential check
+only: it cannot publish a per-session name such as `HOME` or `PATH`, nor a value the file
+cannot express, and `BILLET_ENV_PUBLISH` itself is never published. Listing a name that is
+unset or not credential-shaped does nothing. A misspelt name also does nothing, so the real
+variable stays withheld and keeps logging its line.
 
 ### Locker ownership at mount time (Berth 1)
 
