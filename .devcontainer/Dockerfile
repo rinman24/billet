@@ -2,7 +2,8 @@
 #
 # Much simpler than gswa-backend's multi-stage Dockerfile: billet is a pure-Python
 # CLI/library (typer + dev tooling) with no database, no Redis, and no web service —
-# so there is a single `development` stage and no ci/wheel/release targets here.
+# so there is a single `development` stage (plus a throwaway `tmux-build` stage that
+# compiles tmux for it) and no ci/wheel/release targets here.
 # GitHub Actions builds, lints, and tests billet on hosted runners
 # (see .github/workflows/ci.yml); this image only exists to develop billet locally.
 #
@@ -11,8 +12,9 @@
 #   - uv (pinned, copied from Astral's distroless image — no curl-pipe-bash)
 #   - the toolchain `make lint`/`test`/`imports` need: ruff + pyright (a Node binary),
 #     import-linter, pytest, shellcheck, make, git
-#   - Claude Code, tmux, and the two auth CLIs billet's own workflow runs on: the
-#     Azure CLI (billet manages Azure Hosts via `az`) and the GitHub CLI (PR workflow)
+#   - Claude Code, a pinned tmux built from source, and the two auth CLIs billet's own
+#     workflow runs on: the Azure CLI (billet manages Azure Hosts via `az`) and the
+#     GitHub CLI (PR workflow)
 #   - a non-root `dev` user (uid/gid 1000) so `claude --dangerously-skip-permissions`
 #     runs and bind-mount ownership aligns with the VM host (azureuser, uid 1000)
 #   - an in-container sshd (openssh-server + sshd.conf) so billet reaches this repo as a
@@ -22,6 +24,33 @@
 # (pyright venvPath="."), which the /workspace bind mount would shadow at runtime.
 # devcontainer.json's postCreateCommand runs `uv sync --frozen` to populate it on
 # first container start instead.
+
+# tmux, compiled from the pinned release tarball. The operator's dotfiles tmux.conf needs
+# tmux >= 3.6 (menu-*-style is 3.4, copy-mode-position-style is 3.6) and bookworm ships
+# 3.3a (backports: 3.5a), so on apt every `billet connect` printed `invalid option` lines.
+# Built in its own stage so the toolchain stays out of the final image; only the binary is
+# copied over. Bump both ARGs together: TMUX_SHA256 is the release asset's SHA-256.
+FROM python:3.11-bookworm AS tmux-build
+ARG TMUX_VERSION=3.7c
+ARG TMUX_SHA256=7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        pkg-config \
+        bison \
+        libevent-dev \
+        libncurses-dev; \
+    rm -rf /var/lib/apt/lists/*; \
+    curl -fsSL -o /tmp/tmux.tar.gz \
+        "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz"; \
+    echo "${TMUX_SHA256}  /tmp/tmux.tar.gz" | sha256sum -c -; \
+    tar -C /tmp -xzf /tmp/tmux.tar.gz; \
+    cd "/tmp/tmux-${TMUX_VERSION}"; \
+    ./configure --prefix=/usr/local; \
+    make -j"$(nproc)"; \
+    make install; \
+    /usr/local/bin/tmux -V
 
 FROM python:3.11-bookworm AS development
 
@@ -41,10 +70,11 @@ WORKDIR /workspace
 # System toolchain. ca-certificates/gnupg/curl/build-essential cover repo setup, `make`,
 # and any sdist build; node 20 lets pyright run without downloading its own Node;
 # shellcheck backs shell linting; git comes from bookworm-backports (stock ~2.39 nags on
-# push); openssh-client + openssh-server (the sshd billet connects through) + tmux + jq +
-# sudo round out the dev workflow; azure-cli is here because billet's job is managing
-# Azure Hosts via `az`. apt sources are GPG-pinned; versions float from the pinned repos,
-# reproducibility comes from the image tag.
+# push); openssh-client + openssh-server (the sshd billet connects through) + jq + sudo
+# round out the dev workflow; libevent-core-2.1-7 is the runtime library of the tmux
+# copied in from the tmux-build stage (ncurses is already in the base image); azure-cli is
+# here because billet's job is managing Azure Hosts via `az`. apt sources are GPG-pinned;
+# versions float from the pinned repos, reproducibility comes from the image tag.
 #
 # gh is baked in for the same reason, arrived at the hard way. billet is consumer #1 of
 # its own templates, and templates/workspace/auth-tooling/ is explicit that a recipe is
@@ -74,7 +104,7 @@ RUN set -eux; \
         build-essential \
         openssh-client \
         openssh-server \
-        tmux \
+        libevent-core-2.1-7 \
         jq \
         sudo \
         shellcheck \
@@ -110,6 +140,11 @@ RUN set -eux; \
     rm /tmp/nvim.tar.gz; \
     nvim --version | head -1
 
+# tmux from the tmux-build stage above (its runtime library is in the apt list). Only the
+# binary: the image has no man-db, so a copied man page would have no reader.
+COPY --from=tmux-build /usr/local/bin/tmux /usr/local/bin/tmux
+RUN tmux -V
+
 # Dev ergonomics, baked system-wide: a plain `git push` on a new branch auto-creates the
 # same-named upstream instead of erroring.
 RUN git config --system push.autoSetupRemote true
@@ -119,8 +154,9 @@ RUN git config --system push.autoSetupRemote true
 # start, either via billet's global personal_bootstrap_cmd (every Workspace on `billet start`)
 # or, for a direct devcontainer open, via devcontainer.json's postCreateCommand
 # (`chezmoi update --apply || chezmoi init --apply rinman24`). Both paths converge on the
-# rinman24/dotfiles repo, which owns the tmux config — so no tmux config is baked here. Pinned
-# to the version the operator runs locally, same digest-pinned reproducibility as uv/nvim above.
+# rinman24/dotfiles repo, which owns the tmux config — so no tmux config is baked here, only
+# a tmux new enough to load it (the tmux-build stage). Pinned to the version the operator
+# runs locally, same digest-pinned reproducibility as uv/nvim above.
 RUN sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin -t v2.71.0 \
     && chezmoi --version
 
