@@ -9,6 +9,10 @@ unnecessary". Amends [ADR-0006](adr-0006-claude-token-injection.md): the token i
 its own target writable before writing. Records a **first** decision: billet has never had a
 mount-time repair (see Context), so nothing here supersedes an earlier billet choice.
 
+Amended (2026-10-01) by [ADR-0017](adr-0017-one-compose-project-per-workspace.md): a fresh Claude Locker is now the compose key `claude_home` in a
+project named for the Workspace (Host volume `<workspace-key>_claude_home`); the
+`*_claude_home` glob in the text below still matches it. The repair policy is unchanged.
+
 ## Context
 
 **The Docker behavior.** When a named volume is mounted at a path inside a container, the

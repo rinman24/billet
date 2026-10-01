@@ -10,6 +10,10 @@ comparison this ADR defines is implemented by `billet doctor`
 ([ADR-0015](adr-0015-billet-doctor.md)); this cycle ships the stamp, not the comparison.
 *Amended (2026-09-29):* `doctor` now implements it, and item 5 carries a dated clarification of
 the normalization.
+*Amended (2026-10-01)* by [ADR-0017](adr-0017-one-compose-project-per-workspace.md): the sshd host-key volume of item 1 is the bare compose key
+`sshd_keys` (formerly `<service>-sshd-keys`), in a compose project named for the Workspace, and
+Lockers are bare keys likewise. Not a Berth change: the compose snippet is merged, not hashed,
+and `berth.version` stays `2`.
 
 ## Context
 

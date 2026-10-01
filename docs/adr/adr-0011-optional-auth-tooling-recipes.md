@@ -25,6 +25,12 @@ and the reason validation stays out of `start` is sufficiency, not ownership
 ([ADR-0014](adr-0014-definition-versus-state.md) item 5). The opt-in rule and "nothing goes
 into billet" are unchanged.
 
+Amended (2026-10-01) by [ADR-0017](adr-0017-one-compose-project-per-workspace.md): the recipe Lockers' compose keys are the bare `gh_config` and
+`azure_home`, in a compose project named for the Workspace, so their Host volumes are
+`<workspace-key>_gh_config` and `<workspace-key>_azure_home`. Where the text below names a
+`<service>_gh_config` or `<service>_azure_home` volume, read the bare key. The recipes are
+otherwise unchanged.
+
 ## Context
 
 Two independent facts about how billet runs a Workspace collided in the templates.

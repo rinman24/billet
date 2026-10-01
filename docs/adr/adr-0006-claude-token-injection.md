@@ -22,6 +22,12 @@ program's `not exists()` guard becomes a writability check that fails with a `[b
 error naming the directory's owner instead of a traceback. Token delivery — stdin only, never
 argv — is unchanged.
 
+Amended (2026-10-01) by [ADR-0017](adr-0017-one-compose-project-per-workspace.md): the Claude Locker's compose key is the bare `claude_home` in a
+compose project named for the Workspace, so its Host volume is `<workspace-key>_claude_home`;
+the service-prefixed key and the clause that existing consumer volume names stay grandfathered
+are superseded, and every consumer migrates. The `*_claude_home` glob below still matches. The
+injection itself is unchanged.
+
 ## Context
 
 `claude` running inside a Workspace container must be authenticated, but the two ways
