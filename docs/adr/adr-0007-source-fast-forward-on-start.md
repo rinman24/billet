@@ -13,10 +13,15 @@ and the script reports — without rewriting — drift between the checkout's `o
 configured `repo_url`. The clean-only, ff-only convergence rule recorded here is unchanged —
 see [Amendment (2026-09-04)](#amendment-2026-09-04-non-interactive-git-on-the-host) below.
 
+Amended (2026-10-01): the script no longer runs under `ssh -t`. It is fed on stdin to
+`bash -se` over an agent-forwarded `ssh -A` in batch mode, like every other remote step, so
+the Host's stdout and stderr now arrive separately — see
+[Amendment (2026-10-01)](#amendment-2026-10-01-no-pty-on-the-clone-path) below.
+
 ## Context
 
 `ensure_clone` (`billet.access.source.GitSourceAccess`) emits a remote bash script, run over
-an agent-forwarded `ssh -tA` as the Host admin user, that placed source on the Host. On
+an agent-forwarded ssh as the Host admin user, that placed source on the Host. On
 first use it clones; otherwise it ran only `git -C "$REPO_DIR" fetch --prune`.
 
 Fetch updates the remote-tracking refs but never touches the working tree. So once a repo
@@ -131,7 +136,7 @@ config edit.
 
 ### A git that CAN prompt does not fail — it hangs
 
-`billet start` is unattended, and the remote script runs behind a captured `ssh -t` channel:
+`billet start` is unattended, and the remote script runs behind a captured ssh channel:
 nothing the Host writes while the command is in flight reaches the operator's terminal. Any
 credential prompt therefore becomes a silent stall. Observed on a Host checkout whose
 `origin` had been switched to an HTTPS URL: the `git fetch --prune` above sat at `Username:`
@@ -219,9 +224,56 @@ the script.
 `ensure_clone` now runs the ssh command with `check=False` and raises `ProcessError` itself,
 built from the captured stdout **and** stderr rather than stderr alone.
 
-The reason is the pty. The script runs under `ssh -t`, which gives the remote a terminal and
-merges its stderr onto the same channel as its stdout — so the Host's diagnostics arrive on
-the *client's stdout*, while the client's stderr carries only ssh-level noise. The previous
-error view (`ProcessError` raised by the runner from `stderr`) therefore rendered an empty
-tail for precisely the failures worth reading, including the two cause lines this amendment
-adds. Both streams are kept, in the order they were produced.
+The reason, when this amendment was written, was the pty. The script ran under `ssh -t`,
+which gives the remote a terminal and merges its stderr onto the same channel as its stdout —
+so the Host's diagnostics arrived on the *client's stdout*, while the client's stderr carried
+only ssh-level noise. The previous error view (`ProcessError` raised by the runner from
+`stderr`) therefore rendered an empty tail for precisely the failures worth reading,
+including the two cause lines this amendment adds. The pty is gone since the 2026-10-01
+amendment, and the streams are no longer merged; both are still kept, for the reason given
+there.
+
+## Amendment (2026-10-01): no pty on the clone path
+
+### `ssh -t` broke the `start` checklist
+
+`ensure_clone` ran the script as `ssh -t -A user@host '<script>'` through the process
+runner, which captures stdout and stderr but leaves stdin as the operator's terminal. With a
+terminal on stdin, `ssh -t` switches that terminal to raw mode for the life of the session,
+output post-processing (`OPOST`/`ONLCR`) included. The `start` checklist is a Rich Live
+display redrawing at 12.5 frames a second: in raw mode its full-width lines wrap and a bare
+newline no longer returns the cursor to column 0, so the cursor-up count it uses to erase
+the previous frame falls short. Every frame during the clone step left a copy in scrollback,
+and lines printed afterwards ran together. No other step requested a pty.
+
+Nothing needed it. The script is unattended and, since the 2026-09-04 amendment,
+non-interactive by construction; a pty only gave a git that could prompt somewhere to do it.
+
+### The fix: the same transport as every other remote step
+
+The script is now fed on stdin to `bash -se`:
+
+```text
+ssh -o StrictHostKeyChecking=accept-new -A -o ConnectTimeout=5 -o BatchMode=yes user@host 'bash -se'
+```
+
+Stdin is a pipe carrying the script, so ssh never touches the operator's terminal. This is
+the invocation the compose steps already use. `-A` stays: the key is still forwarded, never
+parked on the Host. `BatchMode=yes` and the 5-second connect timeout match the other steps,
+so an unreachable Host or an ssh that would prompt fails fast instead of waiting. Nothing in
+the script reads stdin: git's clone, fetch and merge do not, and the Host-to-forge ssh git
+starts is given its own pipes. The local acceptance tests run the emitted script exactly this
+way, through `bash -se` on stdin.
+
+### Two streams, not one
+
+Without a pty the Host's stdout and stderr arrive separately. stdout carries the
+`[billet/source]` progress lines and the drift warnings; stderr carries git's own error, the
+script's cause line and any ssh-level failure. `ensure_clone` still raises `ProcessError`
+itself with `check=False`, and builds the message from stdout followed by stderr. That order
+matches the run: the script prints its progress and any drift warning before the failing git
+call and the cause line after it. stdout is kept because a drift warning is usually the
+explanation for the fetch failure beneath it.
+
+`connect` is unaffected. It is interactive, replaces billet's process with `ssh -t`, and
+owns the terminal outright.

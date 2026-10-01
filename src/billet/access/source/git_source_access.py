@@ -1,8 +1,13 @@
 """GitSourceAccess — clone then converge a Workspace's repo onto its Host (agent-forwarded).
 
-Mirrors ``remote_clone`` from the lifted ``up.sh``: an agent-forwarded SSH (``ssh -tA``) so
+Mirrors ``remote_clone`` from the lifted ``up.sh``: an agent-forwarded SSH (``ssh -A``) so
 the operator's key flows in over the connection and is **never parked on the Host**. The
-step is idempotent — it clones on first use, else fetches and then *non-destructively*
+script is fed to ``bash -se`` on a stdin pipe, the same transport every other remote step
+uses, and no pty is requested: ``ssh -t`` against the operator's terminal would switch that
+terminal to raw mode for the life of the step and break the ``start`` checklist's in-place
+redraw (ADR-0007, amendment 2026-10-01).
+
+The step is idempotent — it clones on first use, else fetches and then *non-destructively*
 fast-forwards the checked-out branch to its upstream so merged changes on the repo's default
 branch (devcontainer.json, Dockerfile, compose) actually take effect on the next ``start``
 (ADR-0007). The advance is clean-only and ff-only: it never resets, never discards
@@ -29,6 +34,10 @@ from billet.shared.errors import ProcessError
 #: :mod:`billet.infrastructure.ssh` uses) so a Host that has never met the forge can still
 #: clone, while a *changed* host key still fails.
 _GIT_SSH_COMMAND = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+
+#: Seconds the operator-to-Host ssh may spend connecting — the same bound every other remote
+#: step puts on its ``ssh … bash -se``.
+_SSH_CONNECT_TIMEOUT = 5
 
 
 def _clone_script(spec: WorkspaceSpec) -> str:
@@ -99,12 +108,14 @@ fi
 
 
 def _failure_output(stdout: str, stderr: str) -> str:
-    """Join whichever of the captured streams carried the remote's message.
+    """Join the captured streams into one message: the Host's progress, then its diagnostics.
 
-    ``ssh -t`` gives the remote a pty, which merges its stdout and stderr onto one channel —
-    so the Host's diagnostics arrive on the *client's stdout*, and the client's own stderr
-    carries only ssh-level noise. Reporting ``stderr`` alone would render an empty tail for
-    exactly the failures worth reading, so both are kept, in the order they were produced.
+    Without a pty the remote's two streams arrive separately: stdout carries the script's
+    ``[billet/source]`` progress and drift warnings, stderr carries git's own error, the
+    script's cause line and any ssh-level failure. stdout is put first because the script
+    prints its progress and warnings before the failing git call, and the cause line after
+    it, so this reads in the order the run produced it. stdout is kept rather than dropped
+    because a drift warning is often the explanation for the fetch failure that follows.
     """
     return "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
 
@@ -125,10 +136,17 @@ class GitSourceAccess:
             operator reads git's message (and billet's cause line) rather than a bare exit
             code.
         """
+        # No pty: stdin is a pipe carrying the script, so ssh never touches the operator's
+        # terminal and the start checklist keeps redrawing in place (ADR-0007).
         argv = ssh.ssh_argv(
-            remote.admin_user, remote.ip, _clone_script(spec), tty=True, forward_agent=True
+            remote.admin_user,
+            remote.ip,
+            "bash -se",
+            connect_timeout=_SSH_CONNECT_TIMEOUT,
+            batch_mode=True,
+            forward_agent=True,
         )
-        result = self._runner.run(argv, check=False)
+        result = self._runner.run(argv, input_text=_clone_script(spec), check=False)
         if result.returncode != 0:
             raise ProcessError(
                 result.argv, result.returncode, _failure_output(result.stdout, result.stderr)
