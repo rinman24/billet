@@ -2,8 +2,10 @@
 #
 # Merge into the repo's .devcontainer/docker-compose.yml ONLY if this Workspace actually
 # calls `az`, together with az.Dockerfile.snippet (the binary part). Replace <service>
-# with the compose service devcontainer.json names; keep the volume name's
-# `_azure_home` suffix — it is the canonical Locker name billet's tests and docs use.
+# with the compose service devcontainer.json names; keep the volume key `azure_home` as
+# shipped — it is the canonical Locker key. The key is bare because the compose project,
+# named for the Workspace, supplies the namespace (ADR-0017): on the Host the volume is
+# `<workspace-key>_azure_home`.
 
 services:
   <service>:
@@ -13,7 +15,7 @@ services:
       # so it belongs on a volume rather than baked in. The image need not pre-create the
       # mountpoint: the Berth entrypoint re-owns a root-owned, empty Locker to `dev` at
       # container start (ADR-0013).
-      - <service>_azure_home:/home/dev/.azure
+      - azure_home:/home/dev/.azure
 
 volumes:
-  <service>_azure_home:
+  azure_home:

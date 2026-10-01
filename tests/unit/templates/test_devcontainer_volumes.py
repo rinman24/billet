@@ -24,6 +24,11 @@ billet's own ``.devcontainer/``: billet runs itself as a Workspace and needs bot
 (``az`` manages Hosts, ``gh`` drives pull requests), so it implements both recipes and is
 consumer #1 of its own contract. A template change that is not mirrored there has not been
 dogfooded.
+
+Since ADR-0017 each Workspace is its own compose project, named for its Workspace key by a
+top-level ``name:``, so a Locker's compose key is bare (``claude_home``, not
+``billet_claude_home``) and the project supplies the namespace on the Host. The keys these
+files may use are the canonical set, underscores only.
 """
 
 from dataclasses import dataclass
@@ -41,10 +46,20 @@ _AUTH_TOOLING_DIR = _TEMPLATE_DIR / "auth-tooling"
 _DEVCONTAINER_COMPOSE = _REPO_ROOT / ".devcontainer" / "docker-compose.yml"
 _DEVCONTAINER_DOCKERFILE = _REPO_ROOT / ".devcontainer" / "Dockerfile"
 
-#: The compose service placeholder an adopting repo replaces; billet's own value is
-#: ``billet``, which is what makes the template's volume names comparable to billet's.
-_SERVICE_PLACEHOLDER = "<service>"
-_BILLET_SERVICE = "billet"
+#: The compose project name each file must declare (ADR-0017): the template's placeholder an
+#: adopting repo replaces with its Workspace key, and billet's own Workspace key.
+_WORKSPACE_KEY_PLACEHOLDER = "<workspace-key>"
+_BILLET_WORKSPACE_KEY = "billet"
+
+#: The canonical volume keys billet's compose files use (ADR-0017): bare, because the project
+#: supplies the namespace, and underscores only. A new Locker extends this set on purpose.
+_CANONICAL_VOLUME_KEYS = frozenset({"claude_home", "azure_home", "gh_config", "sshd_keys"})
+
+#: A bare volume key: lowercase words joined by single underscores, no hyphen, no placeholder.
+_BARE_VOLUME_KEY = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
+
+#: A top-level compose project name, e.g. ``name: billet``.
+_PROJECT_NAME = re.compile(r"^name:\s+(?P<name>\S+)\s*$")
 
 #: Where a third-party apt source's signing key belongs, and the pin that ties a source
 #: list to it. billet's own Dockerfile already does this for nodesource and Microsoft; the
@@ -68,7 +83,7 @@ _ENVIRONMENT_ENTRY = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*):\s+(?P<value
 #: The Claude Locker: the one Locker in the base snippet (ADR-0006's target) and the
 #: variable that pins Claude Code to it. The target is fixed by billet's injector, which
 #: writes ``~/.claude/settings.json`` for the ``dev`` user.
-_CLAUDE_LOCKER_SUFFIX = "_claude_home"
+_CLAUDE_LOCKER = "claude_home"
 _CLAUDE_LOCKER_TARGET = "/home/dev/.claude"
 _CLAUDE_CONFIG_DIR_VAR = "CLAUDE_CONFIG_DIR"
 
@@ -98,15 +113,16 @@ class _Recipe:
         name and the id this recipe is parameterized under.
     package
         The Debian package the recipe's Dockerfile snippet must apt-install.
-    volume_suffix
-        What the recipe appends to the compose service name to form the volume name.
+    volume
+        The recipe's bare compose volume key (ADR-0017); on a Host the volume is
+        ``<workspace-key>_<volume>``.
     mountpoint
         The container path the credential volume lands on.
     """
 
     name: str
     package: str
-    volume_suffix: str
+    volume: str
     mountpoint: str
 
     @property
@@ -119,22 +135,6 @@ class _Recipe:
         """The recipe's compose snippet — the credential-volume half."""
         return _AUTH_TOOLING_DIR / f"{self.name}.docker-compose.snippet.yml"
 
-    def volume(self, service: str) -> str:
-        """The credential volume's name for a given compose service.
-
-        Parameters
-        ----------
-        service
-            The compose service name: ``<service>`` while it is still a template
-            placeholder, ``billet`` in billet's own devcontainer.
-
-        Returns
-        -------
-        str
-            The named volume this recipe mounts and declares.
-        """
-        return f"{service}{self.volume_suffix}"
-
 
 #: The recipes issue #66 split out of the base templates. ``gh`` keeps ``hosts.yml`` under
 #: ~/.config/gh — the credential store issue #58 was about; ``az`` writes its Entra refresh
@@ -143,13 +143,13 @@ _RECIPES = [
     _Recipe(
         name="gh",
         package="gh",
-        volume_suffix="_gh_config",
+        volume="gh_config",
         mountpoint="/home/dev/.config/gh",
     ),
     _Recipe(
         name="az",
         package="azure-cli",
-        volume_suffix="_azure_home",
+        volume="azure_home",
         mountpoint="/home/dev/.azure",
     ),
 ]
@@ -266,6 +266,26 @@ def _declared_volumes(compose: Path) -> set[str]:
     return declared
 
 
+def _project_name(compose: Path) -> str | None:
+    """The compose file's top-level ``name:``, or ``None`` when it declares none.
+
+    Parameters
+    ----------
+    compose
+        The compose file to scan.
+
+    Returns
+    -------
+    str | None
+        The project name as written, placeholder included.
+    """
+    for raw in compose.read_text().splitlines():
+        match = _PROJECT_NAME.match(raw)
+        if match is not None:
+            return match.group("name")
+    return None
+
+
 def _directive_text(dockerfile: Path) -> str:
     """A Dockerfile's build directives: comment lines dropped, continuations folded in.
 
@@ -367,13 +387,13 @@ def _apt_installed_packages(dockerfile: Path) -> set[str]:
 
 @pytest.mark.parametrize("recipe", _RECIPES, ids=_RECIPE_IDS)
 def test_a_recipe_names_its_locker_canonically(recipe: _Recipe) -> None:
-    # The volume part of a recipe is one compose Locker, under the canonical name billet's
-    # docs use (`<service>_gh_config`, `<service>_azure_home`), mounted at the tool's config
+    # The volume part of a recipe is one compose Locker, under the canonical bare key billet's
+    # docs use (`gh_config`, `azure_home`; ADR-0017), mounted at the tool's config
     # directory and declared — a mount with no declaration fails at `up`, i.e. only on the
     # VM, so the snippet an adopting repo copies must be a whole volume. Ownership of the
     # target is no longer the recipe's business: the Berth entrypoint repairs it at mount
     # time (ADR-0013), which is what retired the third part of the old three-part recipe.
-    volume: str = recipe.volume(_SERVICE_PLACEHOLDER)
+    volume: str = recipe.volume
     assert _named_volume_mounts(recipe.compose).get(volume) == recipe.mountpoint, (
         f"{recipe.compose.relative_to(_REPO_ROOT)} must mount the named volume `{volume}` "
         f"at {recipe.mountpoint} so `{recipe.name}` credentials survive a rebuild."
@@ -462,7 +482,7 @@ def test_the_base_templates_carry_no_cli_specific_auth_tooling(recipe: _Recipe) 
     names: set[str] = set(_named_volume_mounts(_TEMPLATE_COMPOSE)) | _declared_volumes(
         _TEMPLATE_COMPOSE
     )
-    offenders: set[str] = {name for name in names if name.endswith(recipe.volume_suffix)}
+    offenders: set[str] = {name for name in names if name == recipe.volume}
     assert not offenders, (
         f"{_TEMPLATE_COMPOSE.relative_to(_REPO_ROOT)} still carries {sorted(offenders)}, "
         f"the `{recipe.name}` recipe's credential volume. The base compose snippet declares "
@@ -471,16 +491,14 @@ def test_the_base_templates_carry_no_cli_specific_auth_tooling(recipe: _Recipe) 
 
 
 @pytest.mark.parametrize(
-    ("compose", "service"),
-    [(_TEMPLATE_COMPOSE, _SERVICE_PLACEHOLDER), (_DEVCONTAINER_COMPOSE, _BILLET_SERVICE)],
-    ids=["template", "devcontainer"],
+    "compose", [_TEMPLATE_COMPOSE, _DEVCONTAINER_COMPOSE], ids=["template", "devcontainer"]
 )
-def test_the_base_compose_carries_the_claude_locker(compose: Path, service: str) -> None:
+def test_the_base_compose_carries_the_claude_locker(compose: Path) -> None:
     # The Claude Locker is the one Locker in the base snippet, not a recipe: every billet
     # Workspace receives a token (ADR-0006), and the token lands in ~/.claude/settings.json.
     # CLAUDE_CONFIG_DIR pins `claude` to that same directory; its value is fixed because
     # the injector hardcodes the path, so any other value would split the two.
-    volume: str = f"{service}{_CLAUDE_LOCKER_SUFFIX}"
+    volume: str = _CLAUDE_LOCKER
     assert _named_volume_mounts(compose).get(volume) == _CLAUDE_LOCKER_TARGET, (
         f"{compose.relative_to(_REPO_ROOT)} must mount `{volume}` at {_CLAUDE_LOCKER_TARGET} "
         "— the Claude Locker the ADR-0006 injection writes into."
@@ -547,11 +565,10 @@ def test_billet_devcontainer_implements_the_recipe_it_depends_on(recipe: _Recipe
     # its own workflow is pull requests — so it is consumer #1 of both recipes. A recipe
     # billet does not run itself has never actually been exercised, and half of it here is
     # the same slow failure it warns adopters about: the next rebuild asks for a login.
-    volume: str = recipe.volume(_BILLET_SERVICE)
+    volume: str = recipe.volume
     assert _named_volume_mounts(_DEVCONTAINER_COMPOSE).get(volume) == recipe.mountpoint, (
         f"{_DEVCONTAINER_COMPOSE.relative_to(_REPO_ROOT)} must mount `{volume}` at "
-        f"{recipe.mountpoint}, the `{recipe.name}` recipe with `{_SERVICE_PLACEHOLDER}` = "
-        f"`{_BILLET_SERVICE}`."
+        f"{recipe.mountpoint}, the `{recipe.name}` recipe's Locker under its own key."
     )
     assert volume in _declared_volumes(_DEVCONTAINER_COMPOSE), (
         f"{_DEVCONTAINER_COMPOSE.relative_to(_REPO_ROOT)} mounts `{volume}` without "
@@ -568,17 +585,59 @@ def test_billet_devcontainer_implements_the_recipe_it_depends_on(recipe: _Recipe
 def test_billet_devcontainer_implements_every_volume_the_template_prescribes() -> None:
     # billet runs itself as a Workspace, so it is consumer #1 of these templates: a
     # template volume that is not mirrored here has never actually been exercised. billet's
-    # compose is a superset — it adds both recipes' volumes plus its own Claude home.
-    template: dict[str, str] = {
-        name.replace(_SERVICE_PLACEHOLDER, _BILLET_SERVICE): target
-        for name, target in _named_volume_mounts(_TEMPLATE_COMPOSE).items()
-    }
+    # compose is a superset — it adds both recipes' volumes. Keys are bare (ADR-0017), so
+    # the template's keys and billet's compare as written.
+    template: dict[str, str] = _named_volume_mounts(_TEMPLATE_COMPOSE)
     devcontainer: dict[str, str] = _named_volume_mounts(_DEVCONTAINER_COMPOSE)
     missing: dict[str, str] = {
         name: target for name, target in template.items() if devcontainer.get(name) != target
     }
     assert not missing, (
         "billet's own .devcontainer/docker-compose.yml is missing the template's named "
-        f"volumes {sorted(missing)} (with `{_SERVICE_PLACEHOLDER}` = `{_BILLET_SERVICE}`). "
-        "Port the template change into billet's devcontainer as well."
+        f"volumes {sorted(missing)}. Port the template change into billet's devcontainer "
+        "as well."
+    )
+
+
+@pytest.mark.parametrize(
+    ("compose", "project"),
+    [
+        (_TEMPLATE_COMPOSE, _WORKSPACE_KEY_PLACEHOLDER),
+        (_DEVCONTAINER_COMPOSE, _BILLET_WORKSPACE_KEY),
+    ],
+    ids=["template", "devcontainer"],
+)
+def test_the_base_compose_names_its_project_for_the_workspace(compose: Path, project: str) -> None:
+    # ADR-0017: without a top-level `name:` Compose names the project after the compose
+    # file's directory, and every consumer keeps it in `.devcontainer/`, so every Workspace
+    # on a Host lands in one project called `devcontainer`: one shared network on which
+    # each sibling's service names resolve, and a service-name clash that lets one
+    # Workspace's `up` take over another's container. The name lives in the file so billet,
+    # a hand-run compose and the devcontainer CLI all resolve the same project.
+    assert _project_name(compose) == project, (
+        f"{compose.relative_to(_REPO_ROOT)} must declare the top-level `name: {project}` so "
+        "the Workspace is its own compose project rather than one more `devcontainer`."
+    )
+
+
+@pytest.mark.parametrize("compose", _COMPOSE_FILES, ids=_COMPOSE_IDS)
+def test_every_volume_key_is_bare_and_canonical(compose: Path) -> None:
+    # ADR-0017: the project named for the Workspace supplies the namespace, so a key that
+    # repeats it doubles it on the Host (`billet_billet_claude_home`), and a hyphen mixes two
+    # separators in one name. The keys billet ships are a closed canonical set, so a
+    # template, a recipe and billet's own compose cannot drift apart on a Locker's name.
+    keys: set[str] = set(_named_volume_mounts(compose)) | _declared_volumes(compose)
+    assert keys, (
+        f"{compose.relative_to(_REPO_ROOT)} names no volumes at all; this scan's regexes no "
+        "longer match it, and a contract test that reads nothing passes vacuously forever."
+    )
+    not_bare: set[str] = {key for key in keys if _BARE_VOLUME_KEY.match(key) is None}
+    assert not not_bare, (
+        f"{compose.relative_to(_REPO_ROOT)} uses {sorted(not_bare)}; a volume key is bare, "
+        "lowercase and underscore-only (`sshd_keys`, `claude_home`), with no service prefix."
+    )
+    unknown: set[str] = keys - _CANONICAL_VOLUME_KEYS
+    assert not unknown, (
+        f"{compose.relative_to(_REPO_ROOT)} uses {sorted(unknown)}, outside the canonical "
+        f"keys {sorted(_CANONICAL_VOLUME_KEYS)}. Add a new Locker to the set deliberately."
     )
