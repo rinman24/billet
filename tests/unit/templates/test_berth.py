@@ -144,7 +144,7 @@ def test_mount_targets_are_named_volumes_under_home_only(tmp_path: Path) -> None
         "22 1 0:20 / / rw,relatime - overlay overlay rw\n"
         "100 22 8:1 /var/lib/docker/volumes/billet_claude_home/_data /home/dev/.claude "
         "rw,relatime - ext4 /dev/sda1 rw\n"
-        "101 22 8:1 /var/lib/docker/volumes/billet-sshd-keys/_data /etc/ssh/host_keys "
+        "101 22 8:1 /var/lib/docker/volumes/billet_sshd_keys/_data /etc/ssh/host_keys "
         "rw,relatime - ext4 /dev/sda1 rw\n"
         "102 22 8:1 /home/azureuser/.ssh/authorized_keys /home/dev/.ssh/authorized_keys "
         "ro,relatime - ext4 /dev/sda1 rw\n"

@@ -79,7 +79,7 @@ WORKDIR /workspace
 # gh is baked in for the same reason, arrived at the hard way. billet is consumer #1 of
 # its own templates, and templates/workspace/auth-tooling/ is explicit that a recipe is
 # two halves: the CLI in the image (here) and its credential directory on a named volume
-# (billet_gh_config → ~/.config/gh, long since in docker-compose.yml). billet's PR
+# (the gh_config Locker → ~/.config/gh, long since in docker-compose.yml). billet's PR
 # workflow runs on `gh`, but only the credential half had ever been adopted — the binary
 # was installed by hand into ~/.local/bin, which is not on a volume, so every
 # `compose up --build` wiped it and cost a session the same rediscovery. GitHub, unlike

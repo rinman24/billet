@@ -110,8 +110,10 @@ def compose_prelude(spec: WorkspaceSpec, remote: RemoteHost) -> str:
 def running_ps_command(facts: DevcontainerFacts) -> str:
     """Build the ``docker compose ps`` that prints the running container id of the service.
 
-    Scoped by service name (never by compose project), so Workspaces that share a compose
-    project name on one Host stay apart (D18). ``is_running`` and ``doctor`` both use it.
+    Scoped by service name (never by compose project). Since ADR-0017 each Workspace is its
+    own compose project, so the scope is no longer what keeps Workspaces apart; it stays
+    correct, and harmless, for a consumer whose compose file predates that rule and still
+    shares a project with a sibling. ``is_running`` and ``doctor`` both use it.
     """
     return (
         f"docker compose {compose_file_flags(facts)} "

@@ -19,6 +19,11 @@ consumer copied (in effect from this release) and, when a check needs them, the 
 billet already resolves by name (proposed, [ADR-0014](adr-0014-definition-versus-state.md)
 item 4).
 
+Amended (2026-10-01) by [ADR-0017](adr-0017-one-compose-project-per-workspace.md): each Workspace is now its own compose project, so item 1's
+service-scoped `ps` is no longer what keeps Workspaces that share a project apart. The lookup
+stays scoped by service; it remains correct, and harmless, for a consumer that has not yet
+adopted ADR-0017 and still shares a project. No check changes.
+
 ## Context
 
 The split invariant ADR-0013 describes — one half authored in an image repository, the other in
@@ -63,7 +68,9 @@ never fail. No Dockerfile parsing.**
    the same compose prelude as `start` (`cd <repo_dir>`, billet's exports), it runs
    `docker compose -f … ps --status running -q <service>` and then
    `docker logs <id> 2>&1 | grep '^dev-entrypoint: '`. The lookup is scoped by service name,
-   so Workspaces that share a compose project name on one Host stay apart. A Workspace with no
+   so Workspaces that share a compose project name on one Host stay apart (*amended
+   2026-10-01*: since [ADR-0017](adr-0017-one-compose-project-per-workspace.md) no two
+   Workspaces should share one; the scope stays). A Workspace with no
    running container reports `skipped: not running`. `doctor` never execs into a container and
    never runs a compose verb that changes state. An
    unreachable Host is reported `skipped: host <name> unreachable`, following `billet ls`, and is
