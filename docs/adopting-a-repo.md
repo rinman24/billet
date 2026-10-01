@@ -211,6 +211,79 @@ so a direct devcontainer open gets dotfiles too. Both paths converge on the same
 [`rinman24/dotfiles`](https://github.com/rinman24/dotfiles) repo, which owns the tmux
 config — so no tmux config is baked into any image.
 
+### tmux: a version the dotfiles config can load
+
+The dotfiles `tmux.conf` sets `menu-style`, `menu-selected-style`, `menu-border-style`
+(tmux ≥ 3.4) and `copy-mode-position-style` (tmux ≥ 3.6). Debian bookworm's apt `tmux` is
+3.3a and bookworm-backports stops at 3.5a, so on an apt-installed tmux every `billet connect`
+prints an `invalid option` line for each one. The Berth does not provide tmux: it is a
+runtime contract, not an image ([ADR-0012](adr/adr-0012-the-berth.md)), and the dotfiles
+config is adopted, not owned by billet
+([ADR-0008](adr/adr-0008-workspace-identity-publication.md)). So each consumer repo owns its
+tmux version, and a bookworm-based one gets a new enough tmux by building it in its own
+Dockerfile, as billet's `.devcontainer/Dockerfile` does. A repo whose image comes from the
+shared toolchain image gets tmux from that image instead.
+
+Add a builder stage above the final stage:
+
+```dockerfile
+# tmux from the pinned release tarball: the dotfiles tmux.conf needs >= 3.6 and bookworm
+# ships 3.3a (backports: 3.5a). Bump both ARGs together.
+FROM python:3.11-bookworm AS tmux-build
+ARG TMUX_VERSION=3.7c
+ARG TMUX_SHA256=7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        pkg-config \
+        bison \
+        libevent-dev \
+        libncurses-dev; \
+    rm -rf /var/lib/apt/lists/*; \
+    curl -fsSL -o /tmp/tmux.tar.gz \
+        "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz"; \
+    echo "${TMUX_SHA256}  /tmp/tmux.tar.gz" | sha256sum -c -; \
+    tar -C /tmp -xzf /tmp/tmux.tar.gz; \
+    cd "/tmp/tmux-${TMUX_VERSION}"; \
+    ./configure --prefix=/usr/local; \
+    make -j"$(nproc)"; \
+    make install; \
+    /usr/local/bin/tmux -V
+```
+
+Any bookworm image works as the builder, so `python:3.12-bookworm` is fine too. It must be
+the same Debian release as the final stage, though, because the binary links bookworm's
+libevent. If the builder is a `-slim` image, add `curl` and `ca-certificates` to its
+install list.
+
+In the final stage, drop `tmux` from the `apt-get install` list and add
+`libevent-core-2.1-7` in its place. The binary links only libevent_core, libtinfo and libc.
+A full `python:*-bookworm` base already has libevent_core and a `-slim` one does not, so
+list it either way. `libtinfo6` is in every bookworm base. Then copy in just the binary. The
+man page isn't worth copying unless the image has `man-db`.
+
+```dockerfile
+COPY --from=tmux-build /usr/local/bin/tmux /usr/local/bin/tmux
+RUN tmux -V
+```
+
+To bump the version, pick the release from
+[tmux/tmux releases](https://github.com/tmux/tmux/releases), then download it and hash it.
+Cross-check the hash against GitHub's recorded asset digest, and set both ARGs:
+
+```bash
+V=3.7c
+curl -fsSL -o "tmux-$V.tar.gz" "https://github.com/tmux/tmux/releases/download/$V/tmux-$V.tar.gz"
+sha256sum "tmux-$V.tar.gz"          # macOS: shasum -a 256
+gh api "repos/tmux/tmux/releases/tags/$V" --jq '.assets[].digest'   # must match
+```
+
+To verify, run `billet start <ws>`, which rebuilds the image (`compose up -d --build`). Then,
+in the container, check that `tmux -V` prints the pinned version and that
+`ldd /usr/local/bin/tmux | grep 'not found'` prints nothing. Finally, `billet connect <ws>`
+should print no `invalid option` lines.
+
 ### Rendering billet's Workspace identity (the consuming half)
 
 billet never writes `status-style`, `status-left`, or any other presentation option — the
