@@ -12,11 +12,12 @@ REMOTE = make_remote_host()
 
 
 def _emitted_script(spec: WorkspaceSpec) -> str:
-    """Return the remote bash GitSourceAccess emits (the final ssh argv element)."""
+    """Return the remote bash GitSourceAccess emits (fed to ``bash -se`` on stdin)."""
     runner = FakeProcessRunner(lambda _argv: completed())
     GitSourceAccess(runner).ensure_clone(spec, REMOTE)
-    # The tty path passes the whole script verbatim as the last ssh argument.
-    return runner.calls[-1][-1]
+    script = runner.inputs[-1]
+    assert script is not None, "the clone script must travel on stdin, not in the argv"
+    return script
 
 
 def _first_git_invocation(script: str) -> int:
@@ -37,14 +38,29 @@ def _guarded_failure_block(script: str, command: str) -> list[str]:
     return lines[start : end + 1]
 
 
-def test_ensure_clone_uses_agent_forwarding_and_a_tty() -> None:
+def test_ensure_clone_forwards_the_agent_in_batch_mode_without_a_pty() -> None:
     runner = FakeProcessRunner(lambda _argv: completed())
     GitSourceAccess(runner).ensure_clone(SPEC, REMOTE)
-    cmd = runner.commands()[-1]
-    assert cmd.startswith("ssh ")
-    assert " -A " in f" {cmd} "  # agent forwarding — key stays on the operator's machine
-    assert " -t " in f" {cmd} "  # tty
-    assert "azureuser@20.0.0.5" in cmd
+    argv = runner.calls[-1]
+    assert argv[0] == "ssh"
+    assert "-A" in argv  # agent forwarding — key stays on the operator's machine
+    # No pty: `ssh -t` on the operator's terminal switches it to raw mode and breaks the
+    # start checklist's in-place redraw (ADR-0007, amendment 2026-10-01).
+    assert "-t" not in argv
+    assert "-tt" not in argv
+    assert "BatchMode=yes" in argv
+    assert any(opt.startswith("ConnectTimeout=") for opt in argv)
+    assert argv[-2:] == ("azureuser@20.0.0.5", "bash -se")
+
+
+def test_ensure_clone_feeds_the_script_on_stdin() -> None:
+    runner = FakeProcessRunner(lambda _argv: completed())
+    GitSourceAccess(runner).ensure_clone(SPEC, REMOTE)
+    script = runner.inputs[-1]
+    assert script is not None
+    assert script.startswith("set -euo pipefail\n")
+    # The script is not duplicated into the argv as a remote command.
+    assert all("git clone" not in arg for arg in runner.calls[-1])
 
 
 def test_ensure_clone_script_is_idempotent_clone_or_fetch() -> None:
@@ -145,35 +161,43 @@ def test_script_never_rewrites_the_origin_remote() -> None:
 def test_ensure_clone_raises_from_the_access_not_the_runner() -> None:
     # ensure_clone runs the ssh with check=False so it can build the error from BOTH streams.
     # FakeProcessRunner does not record the kwarg, so assert what it produces: a runner-raised
-    # error (check=True) would carry the empty stderr, never the Host's output.
+    # error (check=True) would carry only the empty stderr, never the Host's stdout.
     runner = FakeProcessRunner(lambda _argv: completed(stdout="remote said no\n", returncode=1))
     with pytest.raises(ProcessError) as excinfo:
         GitSourceAccess(runner).ensure_clone(SPEC, REMOTE)
     assert excinfo.value.stderr == "remote said no"
 
 
-def test_ensure_clone_error_carries_the_pty_merged_stdout() -> None:
-    # `ssh -t` gives the remote a pty, which merges its streams onto the CLIENT's stdout — so
-    # the client's stderr is empty and a stderr-only report would render an empty tail.
-    remote_output = (
-        "[billet/source] fetch failed: git ran non-interactively\n"
-        "fatal: could not read Username for 'https://github.com'"
+def test_ensure_clone_error_carries_the_hosts_stderr() -> None:
+    # Without a pty the Host's diagnostics — git's own error and the script's cause line —
+    # arrive on the client's stderr, separate from stdout.
+    diagnostics = (
+        "fatal: could not read Username for 'https://github.com'\n"
+        "[billet/source] fetch failed: git ran non-interactively"
     )
-    runner = FakeProcessRunner(lambda _argv: completed(stdout=remote_output, returncode=128))
+    runner = FakeProcessRunner(lambda _argv: completed(returncode=1, stderr=diagnostics))
     with pytest.raises(ProcessError) as excinfo:
         GitSourceAccess(runner).ensure_clone(SPEC, REMOTE)
-    assert "[billet/source] fetch failed" in str(excinfo.value)
     assert "could not read Username" in str(excinfo.value)
-    assert excinfo.value.returncode == 128
+    assert "[billet/source] fetch failed" in str(excinfo.value)
+    assert excinfo.value.returncode == 1
 
 
-def test_ensure_clone_error_keeps_both_streams_in_the_order_produced() -> None:
+def test_ensure_clone_error_puts_the_progress_before_the_diagnostics() -> None:
+    # stdout holds the progress and drift warnings the script prints before the failing git
+    # call; stderr holds the failure. A drift warning usually explains the failure, so it is
+    # kept and comes first.
+    progress = (
+        "[billet/source] repo already present; fetching ...\n"
+        "[billet/source] warning: origin fetch URL 'https://x' differs from the configured repo_url\n"
+    )
+    failure = "[billet/source] fetch failed: git ran non-interactively\n"
     runner = FakeProcessRunner(
-        lambda _argv: completed(stdout="host output\n", returncode=1, stderr="ssh noise\n")
+        lambda _argv: completed(stdout=progress, returncode=1, stderr=failure)
     )
     with pytest.raises(ProcessError) as excinfo:
         GitSourceAccess(runner).ensure_clone(SPEC, REMOTE)
-    assert excinfo.value.stderr == "host output\nssh noise"
+    assert excinfo.value.stderr == progress + failure.rstrip("\n")
 
 
 def test_ensure_clone_is_quiet_on_a_zero_exit() -> None:

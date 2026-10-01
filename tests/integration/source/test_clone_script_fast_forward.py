@@ -1,6 +1,7 @@
 """Exercise the emitted ``_clone_script`` body against throwaway local git repos.
 
-These run the real bash the Host would run (``bash -c <script>``) against local bare/clone
+These run the real bash the Host would run (``bash -se`` reading the script on stdin, the
+transport ``ensure_clone`` uses) against local bare/clone
 repos on a filesystem-path ``repo_url``, asserting the observable behavior the fix promises:
 first clone works, a clean branch behind upstream fast-forwards, an untracked file survives
 the advance, and every unsafe checkout (dirty tracked file, diverged branch, detached HEAD)
@@ -70,18 +71,20 @@ def _clone_checkout(root: Path, bare: Path, name: str = "checkout") -> Path:
 
 
 def _emitted_script(bare: Path, repo_dir: str) -> str:
-    """Return the exact remote bash GitSourceAccess emits (the final ssh argv element)."""
+    """Return the exact remote bash GitSourceAccess emits (fed to ``bash -se`` on stdin)."""
     spec = make_workspace_spec(repo_url=str(bare), repo_dir=repo_dir)
     runner = FakeProcessRunner(lambda _argv: completed())
     GitSourceAccess(runner).ensure_clone(spec, make_remote_host())
-    return runner.calls[-1][-1]
+    script = runner.inputs[-1]
+    assert script is not None, "the clone script must travel on stdin, not in the argv"
+    return script
 
 
 def _run_script(bare: Path, repo_dir: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Run the emitted script for ``repo_url=bare`` under ``bash -c`` in ``cwd``."""
-    script = _emitted_script(bare, repo_dir)
+    """Run the emitted script for ``repo_url=bare`` under ``bash -se`` in ``cwd``."""
     return subprocess.run(
-        ["bash", "-c", script],
+        ["bash", "-se"],
+        input=_emitted_script(bare, repo_dir),
         cwd=str(cwd),
         capture_output=True,
         text=True,
@@ -113,9 +116,10 @@ def _install_stub_git(root: Path, record: Path) -> Path:
 def _run_script_with_env(
     bare: Path, repo_dir: str, cwd: Path, env: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
-    """Run the emitted script under ``bash -c`` in ``cwd`` with an explicit environment."""
+    """Run the emitted script under ``bash -se`` in ``cwd`` with an explicit environment."""
     return subprocess.run(
-        ["bash", "-c", _emitted_script(bare, repo_dir)],
+        ["bash", "-se"],
+        input=_emitted_script(bare, repo_dir),
         cwd=str(cwd),
         capture_output=True,
         text=True,
