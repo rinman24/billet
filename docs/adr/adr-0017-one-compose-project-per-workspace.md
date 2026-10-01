@@ -133,4 +133,4 @@ each Workspace in one sitting: merge, `billet stop`, copy, `billet start`, check
   and the shared-project reasoning of ADR-0015; one ADR that each of them points at is easier
   to find than five amendments.
 - **A `billet migrate` command**, or **a copy-paste runbook**, for the one-time data move.
-  Rejected: a permanent feature for a one-time job, and sixteen hand-typed volume copies.
+  Rejected: a permanent feature for a one-time job, and fifteen hand-typed volume copies.
