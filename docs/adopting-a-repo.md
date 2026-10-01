@@ -105,8 +105,9 @@ variable stays withheld and keeps logging its line.
 ### Locker ownership at mount time (Berth 1)
 
 A **Locker** is a named compose volume that persists one tool's state under the login
-user's home — `<service>_claude_home` on `~/.claude`, `<service>_gh_config` on
-`~/.config/gh`, `<service>_azure_home` on `~/.azure`. Docker initialises a fresh volume from
+user's home — `claude_home` on `~/.claude`, `gh_config` on `~/.config/gh`, `azure_home`
+on `~/.azure`, each a bare key in the Workspace's own compose project
+([below](#one-compose-project-per-workspace)). Docker initialises a fresh volume from
 whatever the image has at the mountpoint; when the image has nothing there, the directory
 comes up `root:root` and the tool cannot write it. From Berth 1 the entrypoint, not the
 image, guarantees ownership
@@ -147,10 +148,11 @@ is only reported; decide whose files they are before re-owning them by hand.
 
 Then merge the two snippets:
 
-- `docker-compose.snippet.yml` into the repo's compose service: the
-  `127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-<port>}:22` publish, the entrypoint wiring,
-  `init: true`, the `${BILLET_AUTHORIZED_KEYS:-…}` bind mount of `authorized_keys`, the
-  host-keys named volume, and the Claude Locker — `<service>_claude_home` on `~/.claude`
+- `docker-compose.snippet.yml` into the repo's compose file: the top-level
+  `name: <workspace-key>` ([below](#one-compose-project-per-workspace)), and in the
+  service the `127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-<port>}:22` publish, the entrypoint
+  wiring, `init: true`, the `${BILLET_AUTHORIZED_KEYS:-…}` bind mount of `authorized_keys`,
+  the `sshd_keys` host-keys named volume, and the Claude Locker — `claude_home` on `~/.claude`
   with `CLAUDE_CONFIG_DIR: /home/dev/.claude` under `environment:`. The Locker is where
   the token billet injects lands ([ADR-0006](adr/adr-0006-claude-token-injection.md)); the
   variable pins `claude` to the same directory, and its value is fixed because the injector
@@ -173,6 +175,52 @@ Both snippets carry nothing beyond what every Workspace needs — no toolchain, 
 authentication tooling. The one Locker the compose snippet ships is Claude's, because every
 Workspace receives a token; `gh` and `az` Lockers are the volume part of their recipes.
 
+### One compose project per Workspace
+
+The repo's compose file **must** carry a top-level `name:` equal to the Workspace's key
+in billet's `config.toml` (`[workspaces.<key>]`), and every volume key in it is bare and
+underscore-only ([ADR-0017](adr/adr-0017-one-compose-project-per-workspace.md)):
+
+```yaml
+name: genshift-brand          # the Workspace key
+
+services:
+  genshift-brand:
+    volumes:
+      - sshd_keys:/etc/ssh/host_keys
+      - claude_home:/home/dev/.claude
+
+volumes:
+  sshd_keys:
+  claude_home:
+```
+
+Without `name:`, Compose names the project after the compose file's directory, and every
+Workspace keeps its compose file in `.devcontainer/`, so every Workspace on a Host joins
+one project called `devcontainer`: one network on which each sibling's service names
+resolve, a service name two Workspaces share becoming one service (the second `up`
+recreates the first one's container), and `Found orphan containers` on every `start`.
+The name lives in the file, not on billet's command line, so billet, a hand-run
+`docker compose -f …` and the devcontainer CLI all resolve the same project. The
+project supplies the namespace, so keys carry no service prefix: key `claude_home` in
+project `genshift-brand` is the Host volume `genshift-brand_claude_home`. The canonical
+keys are `claude_home`, `gh_config`, `azure_home` and `sshd_keys`; any data volume of
+the repo's own follows the same rule (`postgres_data`, not `postgres-data`).
+
+Renaming a project or a key on a Workspace that already runs moves every volume to a
+new, empty name. Copy the old volumes into the new names before the next `billet start`,
+which fast-forwards the checkout before `up`, or the Workspace comes up with no logins
+and new sshd host keys.
+
+**VS Code: Remote-SSH or Attach, never Reopen.** The devcontainer CLI honours the
+top-level `name:`, so it resolves the same project billet does. Dev Containers "Reopen
+in Container" on a billet Host checkout would recreate the Workspace's container with VS
+Code's own override, killing its tmux sessions, and the next `billet start` would
+recreate it back. The supported routes are Remote-SSH to the Workspace's sshd through
+billet's ssh alias (the `container_alias` host `billet ssh-config` writes), and Dev
+Containers "Attach to Running Container" over Remote-SSH to the Host. "Reopen in
+Container" on a billet Host is unsupported.
+
 ### Optional: auth tooling (`gh`, `az`)
 
 A Workspace that runs `gh` or `az` opts in by merging a **recipe** from
@@ -187,8 +235,8 @@ A recipe is two parts, and both are required:
 | Binary — the CLI, in the image | `<tool>.Dockerfile.snippet` | A *feature* will not install it (see the warning above), so the binary otherwise lands in `~/.local/bin` by hand — which is on no volume, so every `compose up --build` wipes it |
 | Locker — its credentials, on a named volume | `<tool>.docker-compose.snippet.yml` | The token is written to the container filesystem, so without the volume every rebuild demands `gh auth login` / `az login` again |
 
-`gh` mounts `<service>_gh_config` on `~/.config/gh`, `az` mounts `<service>_azure_home` on
-`~/.azure` — the same persistence pattern as `<service>_claude_home`
+`gh` mounts `gh_config` on `~/.config/gh`, `az` mounts `azure_home` on `~/.azure` — the
+same persistence pattern as `claude_home`
 ([ADR-0006](adr/adr-0006-claude-token-injection.md)). There is no third, image-side part:
 the entrypoint re-owns a fresh Locker at container start
 ([ADR-0013](adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)), so a Locker is

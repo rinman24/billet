@@ -28,14 +28,16 @@ next rebuild, and then costs a session the same rediscovery.
 | Recipe | Part | Merge into | Provides |
 | --- | --- | --- | --- |
 | `gh.Dockerfile.snippet` | binary | the repo's dev-container Dockerfile | `gh` from `cli.github.com/packages` |
-| `gh.docker-compose.snippet.yml` | volume | `.devcontainer/docker-compose.yml` | `<service>_gh_config` → `~/.config/gh` |
+| `gh.docker-compose.snippet.yml` | volume | `.devcontainer/docker-compose.yml` | `gh_config` → `~/.config/gh` |
 | `az.Dockerfile.snippet` | binary | the repo's dev-container Dockerfile | `azure-cli` from `packages.microsoft.com` |
-| `az.docker-compose.snippet.yml` | volume | `.devcontainer/docker-compose.yml` | `<service>_azure_home` → `~/.azure` |
+| `az.docker-compose.snippet.yml` | volume | `.devcontainer/docker-compose.yml` | `azure_home` → `~/.azure` |
 
 Take `gh`, `az`, both, or neither. Placeholders match the base templates: `<service>` is
-the compose service `devcontainer.json` names. Keep the volume suffixes as shipped
-(`_gh_config`, `_azure_home`) — they are the canonical Locker names; a repo that already
-carries an older name (`claude_home`, `genshift-brand_gh_config`, …) keeps it.
+the compose service `devcontainer.json` names. Keep the volume keys as shipped
+(`gh_config`, `azure_home`): they are the canonical Locker keys, bare because the compose
+project, named for the Workspace, supplies the namespace, so on the Host they are
+`<workspace-key>_gh_config` and `<workspace-key>_azure_home`
+([ADR-0017](../../../docs/adr/adr-0017-one-compose-project-per-workspace.md)).
 
 **The `az` binary part requires a consumer-built image.** The shared toolchain image never
 ships `azure-cli`, so a Workspace whose Dockerfile is a bare `FROM` of that image cannot

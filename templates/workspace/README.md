@@ -13,7 +13,7 @@ A Workspace is on the Berth when it exhibits:
 - sshd listening on `127.0.0.1:${BILLET_CONTAINER_SSH_PORT}`, key-only, `dev` only
   (`sshd.conf`, the compose snippet's `ports:`);
 - a `dev` login user at uid/gid 1000 with passwordless sudo (`Dockerfile.snippet`);
-- sshd host keys persisted on a named volume (`dev-entrypoint.sh`, the `<service>-sshd-keys`
+- sshd host keys persisted on a named volume (`dev-entrypoint.sh`, the `sshd_keys`
   volume);
 - the container environment republished to login shells via `/etc/environment`, with
   credential-shaped variables withheld unless `BILLET_ENV_PUBLISH` lists them
@@ -35,8 +35,10 @@ start and logs `dev-entrypoint: berth=N` — or `berth=unknown` when the file is
 log below tells you what changed above your number.
 
 The Berth is not the container, the image, `devcontainer.json`, or any **Locker** — a named
-compose volume persisting one tool's state under `/home/dev` (`<service>_claude_home`,
-`<service>_gh_config`, `<service>_azure_home`). Lockers are declared only in the consumer's
+compose volume persisting one tool's state under `/home/dev` (`claude_home`, `gh_config`,
+`azure_home`). Each is a bare key in a compose project named for the Workspace, so on the
+Host it is `<workspace-key>_claude_home` and so on
+([ADR-0017](../../docs/adr/adr-0017-one-compose-project-per-workspace.md)). Lockers are declared only in the consumer's
 compose file; they need no pre-created mountpoint in the image because the Berth entrypoint
 repairs ownership at mount time. `~/.ssh` is Berth infrastructure, not a Locker.
 
@@ -49,12 +51,12 @@ Copy verbatim into the repo's `.devcontainer/`:
 | `berth.version` | `.devcontainer/berth.version` | The Berth version this copy of the files carries; the entrypoint reads it from beside itself and logs `berth=N` |
 | `authorized_keys-stub` | `.devcontainer/authorized_keys-stub` | Empty fallback so non-VM builds never hard-fail |
 
-Merge into existing files (placeholders: `<service>`, `<workspaceFolder>`, `<port>`,
-`<repo>`):
+Merge into existing files (placeholders: `<workspace-key>`, `<service>`,
+`<workspaceFolder>`, `<port>`, `<repo>`):
 
 | Template | Merge into | Purpose |
 | --- | --- | --- |
-| `docker-compose.snippet.yml` | `.devcontainer/docker-compose.yml` | Loopback port publish, entrypoint, `init`, `authorized_keys` bind mount, host-keys volume, the Claude Locker (`<service>_claude_home` on `~/.claude` + `CLAUDE_CONFIG_DIR`) |
+| `docker-compose.snippet.yml` | `.devcontainer/docker-compose.yml` | The top-level `name: <workspace-key>` ([ADR-0017](../../docs/adr/adr-0017-one-compose-project-per-workspace.md)), loopback port publish, entrypoint, `init`, `authorized_keys` bind mount, the `sshd_keys` host-keys volume, the Claude Locker (`claude_home` on `~/.claude` + `CLAUDE_CONFIG_DIR`) |
 | `Dockerfile.snippet` | the repo's dev-container Dockerfile | `openssh-server`, `dev` user (uid 1000), `~/.ssh` mountpoint, sshd drop-in |
 
 Both install no CLI. The one Locker the base compose snippet carries is Claude's: every
@@ -80,9 +82,9 @@ Optional, opt-in — merge only into a Workspace that actually calls the CLI
 | Recipe | Merge into | Purpose |
 | --- | --- | --- |
 | `auth-tooling/gh.Dockerfile.snippet` | the repo's dev-container Dockerfile | `gh` from GitHub's GPG-pinned apt source |
-| `auth-tooling/gh.docker-compose.snippet.yml` | `.devcontainer/docker-compose.yml` | `<service>_gh_config` Locker on `~/.config/gh` — the credential store survives a rebuild |
+| `auth-tooling/gh.docker-compose.snippet.yml` | `.devcontainer/docker-compose.yml` | `gh_config` Locker on `~/.config/gh` — the credential store survives a rebuild |
 | `auth-tooling/az.Dockerfile.snippet` | the repo's dev-container Dockerfile | `azure-cli` from Microsoft's GPG-pinned apt source (requires a consumer-built image) |
-| `auth-tooling/az.docker-compose.snippet.yml` | `.devcontainer/docker-compose.yml` | `<service>_azure_home` Locker on `~/.azure` — the `az login` token survives a rebuild |
+| `auth-tooling/az.docker-compose.snippet.yml` | `.devcontainer/docker-compose.yml` | `azure_home` Locker on `~/.azure` — the `az login` token survives a rebuild |
 
 A recipe is two parts — binary and Locker — and needs both; there is no image-side
 mountpoint to create, since the Berth entrypoint re-owns a fresh Locker at container start
@@ -100,6 +102,16 @@ Rows are keyed by the Berth version that introduced them (`berth.version`). A co
 picks a change up only by re-copying the named files — nothing here is applied to an adopted
 repo automatically — and every re-copy includes `berth.version`, so the container's
 `dev-entrypoint: berth=N` line states which row it is on.
+
+**2026-10-01, not a Berth row.** The compose snippet gains a top-level
+`name: <workspace-key>`, and its volume keys become bare and underscore-only: `sshd_keys`
+and `claude_home`, plus the recipes' `gh_config` and `azure_home`
+([ADR-0017](../../docs/adr/adr-0017-one-compose-project-per-workspace.md)). No Berth behavior changes and no hashed Berth
+file changes, so `berth.version` stays `2`. To adopt: add the `name:` line and rename
+the keys in the repo's compose file, mounts and top-level `volumes:` alike. Every renamed
+key is a new, empty volume on the Host, so a running Workspace copies its old volumes
+into the new names before its next `billet start`, or it comes up with no logins and
+new sshd host keys.
 
 | Berth | Date | Change | To adopt |
 | --- | --- | --- | --- |

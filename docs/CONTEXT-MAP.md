@@ -15,7 +15,7 @@ an ADR takes each one.
 | **HostProvider** | The one backend seam (Azure VM today). |
 | **Berth** | The Workspace runtime contract billet publishes: sshd on the assigned loopback port, `dev` at uid/gid 1000 with passwordless sudo, the entrypoint's behaviors (host-key persistence, environment snapshot to `/etc/environment`, mount-target ownership repair, `~/.ssh` ensured), and the `berth=N` startup line. Distributed as the files under `templates/workspace/` ([ADR-0012](adr/adr-0012-the-berth.md)). Not the container, the image, `devcontainer.json`, or any Locker. |
 | **Berth version** | Monotonic integer in `templates/workspace/berth.version`, independent of billet's SemVer. Starts at 1 with the 2026-09 cycle; earlier template revisions are pre-versioning. |
-| **Locker** | One named compose volume persisting one tool's state under the login user's home, e.g. `<service>_claude_home:/home/dev/.claude`. Declared only in the consumer's compose file; nothing in an image or in billet's code declares one. `~/.ssh` is Berth infrastructure, never a Locker. |
+| **Locker** | One named compose volume persisting one tool's state under the login user's home, e.g. `claude_home:/home/dev/.claude`: a bare, underscore-only key in a compose project named for the Workspace, so on the Host it is `<workspace-key>_claude_home` ([ADR-0017](adr/adr-0017-one-compose-project-per-workspace.md)). Declared only in the consumer's compose file; nothing in an image or in billet's code declares one. `~/.ssh` is Berth infrastructure, never a Locker. |
 | **Recipe** | An opt-in `auth-tooling/` pair: the CLI's install snippet (binary) and its Locker snippet (volume). Two parts, not three: the image-side mountpoint part is gone ([ADR-0011](adr/adr-0011-optional-auth-tooling-recipes.md) as amended by [ADR-0013](adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)). |
 | **Facts contract** | The five `devcontainer.json` fields billet reads (`ContainerAccess` → `DevcontainerFacts`: `service`, `dockerComposeFile`, `workspaceFolder`, `remoteUser`, `postCreateCommand`). Unchanged by this cycle ([ADR-0002](adr/adr-0002-workspace-subsystem.md) §1). |
 | **Definition vs state** | billet never writes a file Docker, Compose or the devcontainer tooling reads to build or create a container; it may write runtime state into a container it started ([ADR-0014](adr/adr-0014-definition-versus-state.md)). |
@@ -56,16 +56,20 @@ Verified 2026-09-09 by direct query of each remote. All three live consumers wer
 the 2026-09-08 templates (the last pre-versioning revision); each moves to Berth 1 by copying
 `dev-entrypoint.sh` and `berth.version` from billet `main` once billet 0.4.0 ships.
 
-| Repo | Builds from | Berth | Lockers mounted |
+| Repo | Builds from | Berth | Lockers mounted (compose keys, ADR-0017) |
 |---|---|---|---|
-| genshift-brand | shared image `devcontainer:1.0.2@sha256:05e6807…` (one-line `FROM`) | pre-versioning, current | `genshift-brand_claude_home`, `genshift-brand_gh_config` (plus `-sshd-keys`, Berth infrastructure) |
-| squadra | own Dockerfile from `python:3.11-bookworm` | pre-versioning, current | `squadra_claude_home`, `squadra_gh_config` (plus `squadra-sshd-keys`) |
-| gswa-backend | own Dockerfile from `python:3.12-bookworm` | pre-versioning, current | `claude_home`, `azure_home` (plus sshd keys); its `127.0.0.1:2222:22` port line is grandfathered by ADR-0003 |
-| billet (reference Workspace) | own Dockerfile | Berth 1 from billet 0.4.0 | `billet_claude_home`, `billet_azure_home`, `billet_gh_config` |
+| genshift-brand | shared image `devcontainer:1.0.2@sha256:05e6807…` (one-line `FROM`) | pre-versioning, current | `claude_home`, `gh_config` (plus `sshd_keys`, Berth infrastructure) |
+| squadra | own Dockerfile from `python:3.11-bookworm` | pre-versioning, current | `claude_home`, `gh_config` (plus `sshd_keys`) |
+| gswa-backend | own Dockerfile from `python:3.12-bookworm` | pre-versioning, current | `claude_home`, `azure_home` (plus `sshd_keys`, and the data volumes `postgres_data` and `redis_data`); its `127.0.0.1:2222:22` port line is grandfathered by ADR-0003 |
+| billet (reference Workspace) | own Dockerfile | Berth 1 from billet 0.4.0 | `claude_home`, `azure_home`, `gh_config` (plus `sshd_keys`) |
 | genshift-devcontainer | not a Workspace: its `sshd.conf` is a build input of the image | n/a | none |
 
-Existing consumer volume names stay grandfathered; the canonical `<service>_claude_home`,
-`<service>_gh_config` and `<service>_azure_home` names apply to new adopters. The shared image's
+Every consumer compose file names its compose project after its Workspace key and uses bare,
+underscore-only volume keys ([ADR-0017](adr/adr-0017-one-compose-project-per-workspace.md)), so each Workspace has
+its own network and its own `<workspace-key>_<key>` volumes on the Host; the keys above are
+the ADR-0017 ones, each landing with that consumer's own rename and volume migration. This
+replaces the earlier rule that left existing consumer volume names as they were and gave
+service-prefixed names to new adopters only. The shared image's
 2.0.0 release (drops Locker pre-creation) waits for genshift-brand to be on Berth 1, because a
 fresh `gh` Locker mounted by a pre-Berth-1 entrypoint into a 2.0.0 image would stay root-owned
 with nothing to repair it.

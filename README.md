@@ -198,7 +198,9 @@ Workspace wrongly placed on one as `INVALID` rather than probing it. See
   (sshd on the assigned loopback port, `dev` at uid/gid 1000, the entrypoint's behaviors),
   versioned independently of billet by `berth.version`.
 - **Locker** — one named compose volume persisting one tool's state under the login user's
-  home (`<service>_claude_home:/home/dev/.claude`), declared only in the consumer's compose file.
+  home (`claude_home:/home/dev/.claude`), declared only in the consumer's compose file, whose
+  top-level `name:` is the Workspace key, so each Workspace is its own compose project
+  ([ADR-0017](https://rinman24.github.io/billet/adr/adr-0017-one-compose-project-per-workspace/)).
 
 The full glossary and the map of the repositories billet collaborates with are in the
 [context map](https://rinman24.github.io/billet/CONTEXT-MAP/).
