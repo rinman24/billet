@@ -60,3 +60,4 @@ nav:
       - ADR-0013 Mountpoint ownership repaired at mount time: adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md
       - ADR-0014 Definition versus state: adr/adr-0014-definition-versus-state.md
       - ADR-0015 billet doctor: adr/adr-0015-billet-doctor.md
+      - ADR-0017 One compose project per Workspace: adr/adr-0017-one-compose-project-per-workspace.md
