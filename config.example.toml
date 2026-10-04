@@ -61,7 +61,7 @@ default_host = "devbox"
 # ---------------------------------------------------------------------------------
 [hosts.devbox]
 # --- Azure placement (required) ---
-resource_group = "gswa-devbox-rg"
+resource_group = "rg-gswa-devbox"
 # Optional; defaults to the table key. The live devbox VM is named "gswa-devbox".
 vm_name        = "gswa-devbox"
 location       = "westus3"
