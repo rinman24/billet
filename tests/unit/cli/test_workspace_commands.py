@@ -39,7 +39,7 @@ subscription_id = "sub-123"
 default_host = "devbox"
 
 [hosts.devbox]
-resource_group = "gswa-devbox-rg"
+resource_group = "rg-gswa-devbox"
 vm_name = "gswa-devbox"
 location = "westus3"
 admin_user = "azureuser"

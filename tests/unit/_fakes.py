@@ -37,7 +37,7 @@ from billet.shared.errors import (
 
 _DEFAULT_HOST_SPEC = HostSpec(
     key="devbox",
-    resource_group="gswa-devbox-rg",
+    resource_group="rg-gswa-devbox",
     vm_name="gswa-devbox",
     location="westus3",
     admin_user="azureuser",
