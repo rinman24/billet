@@ -586,7 +586,8 @@ def _ls_host_line(group: LsHostGroup) -> Text:
 
 def _ls_unreachable_hint(host_key: str) -> Text:
     line = Text()  # no base style: the appended command must stay ink
-    line.append(f"{glyphs().info} host {host_key} is unreachable — bring it up with ", style="meta")
+    hint = f"{glyphs().info} host {host_key} is unreachable — bring it up with "
+    line.append(hint, style="meta")
     line.append(f"billet host up --host {host_key}")
     return line
 
@@ -662,8 +663,9 @@ def render_ls_json(groups: Sequence[LsHostGroup], console: Console | None = None
 # --- doctor view (ADR-0015) -------------------------------------------------------------
 
 # Each report line is (depth, verdict, text): verdict "ok" / "warn" / "skip" / "repaired"
-# leads the line, "diff" is a normalized diff line, "" is a heading or note. The tty and piped renderers
-# share this list, so the words are identical and only the gutter and color differ.
+# leads the line, "diff" is a normalized diff line, "" is a heading or note. The tty and
+# piped renderers share this list, so the words are identical and only the gutter and color
+# differ.
 _DoctorLine = tuple[int, str, str]
 
 
@@ -795,7 +797,8 @@ def render_doctor(
 
     A drifted file prints ``warn: <file> directive drift (N lines)`` and then the capped
     unified diff of its *normalized* lines; ``N``, the cap and ``… (M more)`` count changed
-    (``+``/``-``) lines only, never the ``@@`` separators between hunks. The runtime lines follow each Workspace's files:
+    (``+``/``-``) lines only, never the ``@@`` separators between hunks. The runtime lines
+    follow each Workspace's files:
     ``ok: running berth=N`` (or ``warn: running berth=N, checkout stamp M``), then
     ``ok (repaired at start): …`` and ``warn: …`` per entrypoint repair and warning, or
     ``skipped: not running``. The report is informational: callers exit 0.
