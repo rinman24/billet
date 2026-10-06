@@ -31,7 +31,9 @@ from billet.contracts import (
     BERTH_VERSION_FILE,
     BerthFileState,
     BerthFileStatus,
+    ComposeReport,
     DoctorReport,
+    ExposedPort,
     HostPowerState,
     HostSpec,
     Plan,
@@ -39,6 +41,7 @@ from billet.contracts import (
     RunningBerthState,
     RuntimeReport,
     RuntimeState,
+    SharedProject,
     StampState,
     StampStatus,
     StepKind,
@@ -713,8 +716,46 @@ def _running_berth_line(runtime: RuntimeReport) -> _DoctorLine:
     return (2, "warn", f"{running}, checkout stamp {stamp}")
 
 
-def _runtime_lines(runtime: RuntimeReport) -> list[_DoctorLine]:
-    """Build the runtime section (D-A4-8): running Berth, each repair, each warning."""
+def _address(url: str) -> str:
+    """Render a publisher's host address: IPv6 bracketed, an empty one as ``*`` (any)."""
+    if not url:
+        return "*"
+    return f"[{url}]" if ":" in url else url
+
+
+def _exposed_line(exposed: ExposedPort, workspace: str) -> _DoctorLine:
+    port = exposed.publisher
+    service = exposed.service
+    if exposed.project != workspace:
+        service += f" (project {exposed.project})"
+    binding = f"{_address(port.url)}:{port.published_port}->{port.target_port}/{port.protocol}"
+    return (2, "warn", f"{service} publishes {binding} on a non-loopback address (ADR-0003)")
+
+
+def _compose_lines(compose: ComposeReport, workspace: str) -> list[_DoctorLine]:
+    """Build the compose-project and published-port lines (A8, D-A8-13)."""
+    lines: list[_DoctorLine] = [
+        (2, "warn", f"runs as compose project {project}, expected {workspace} (ADR-0017)")
+        for project in compose.foreign_projects
+    ]
+    if not lines:
+        lines.append((2, "ok", f"compose project {workspace}"))
+    lines.extend(_exposed_line(exposed, workspace) for exposed in compose.exposed)
+    if not compose.exposed:
+        lines.append((2, "ok", "ports loopback only"))
+    return lines
+
+
+def _shared_project_line(shared: SharedProject) -> _DoctorLine:
+    workspaces = ", ".join(shared.workspaces)
+    return (1, "warn", f"compose project {shared.project} shared by {workspaces} (ADR-0017)")
+
+
+def _runtime_lines(runtime: RuntimeReport, workspace: str) -> list[_DoctorLine]:
+    """Build the runtime section (D-A4-8): running Berth, each repair, each warning.
+
+    A running Workspace then gets its compose-project and published-port lines (A8).
+    """
     if runtime.state is RuntimeState.NOT_RUNNING:
         return [(2, "skip", "not running")]
     if runtime.state is RuntimeState.UNREADABLE:
@@ -722,13 +763,18 @@ def _runtime_lines(runtime: RuntimeReport) -> list[_DoctorLine]:
     lines = [_running_berth_line(runtime)]
     lines.extend((2, "repaired", text) for text in runtime.repaired)
     lines.extend((2, "warn", text) for text in runtime.warnings)
+    if runtime.compose is not None:
+        lines.extend(_compose_lines(runtime.compose, workspace))
     return lines
 
 
 def _runtime_warnings(runtime: RuntimeReport | None) -> int:
     if runtime is None or runtime.state is not RuntimeState.RUNNING:
         return 0
-    return (runtime.berth_state is not RunningBerthState.MATCH) + len(runtime.warnings)
+    count = (runtime.berth_state is not RunningBerthState.MATCH) + len(runtime.warnings)
+    if runtime.compose is not None:
+        count += len(runtime.compose.foreign_projects) + len(runtime.compose.exposed)
+    return count
 
 
 def doctor_lines(report: DoctorReport, billet_version: str) -> list[_DoctorLine]:
@@ -748,6 +794,11 @@ def doctor_lines(report: DoctorReport, billet_version: str) -> list[_DoctorLine]
         if status.host != host:
             host = status.host
             lines.append((0, "host", f"host {host}"))
+            lines.extend(
+                _shared_project_line(shared)
+                for shared in report.shared_projects
+                if shared.host == host
+            )
         head = (
             status.head
             if status.head is not None
@@ -758,15 +809,20 @@ def doctor_lines(report: DoctorReport, billet_version: str) -> list[_DoctorLine]
         for file_status in status.files:
             lines.extend(_file_lines(file_status))
         if status.runtime is not None:
-            lines.extend(_runtime_lines(status.runtime))
+            lines.extend(_runtime_lines(status.runtime, status.workspace))
     for skip in report.skipped:
         lines.append((0, "skip", f"host {skip.host} {skip.reason} ({', '.join(skip.workspaces)})"))
     return lines
 
 
 def doctor_warning_count(report: DoctorReport) -> int:
-    """Count the ``warn`` lines of a report: stamp, each non-ok file, and the runtime's."""
-    return sum(
+    """Count the ``warn`` lines of a report.
+
+    Per Workspace: the stamp, each non-ok file, and the runtime's (running Berth, entrypoint
+    warnings, a foreign compose project, each non-loopback publish). Per Host: each shared
+    compose project.
+    """
+    return len(report.shared_projects) + sum(
         (status.stamp.state is not StampState.OK)
         + sum(f.state is not BerthFileState.OK for f in status.files)
         + _runtime_warnings(status.runtime)
@@ -795,13 +851,22 @@ def render_doctor(
 ) -> None:
     """Render ``billet doctor``: glyph gutters and color on a tty, plain lines when piped.
 
-    A drifted file prints ``warn: <file> directive drift (N lines)`` and then the capped
+    The header names the installed billet and its Berth, then what is compared and what is
+    not. A drifted file prints ``warn: <file> directive drift (N lines)`` and then the capped
     unified diff of its *normalized* lines; ``N``, the cap and ``… (M more)`` count changed
-    (``+``/``-``) lines only, never the ``@@`` separators between hunks. The runtime lines
-    follow each Workspace's files:
-    ``ok: running berth=N`` (or ``warn: running berth=N, checkout stamp M``), then
-    ``ok (repaired at start): …`` and ``warn: …`` per entrypoint repair and warning, or
-    ``skipped: not running``. The report is informational: callers exit 0.
+    (``+``/``-``) lines only, never the ``@@`` separators between hunks.
+
+    The runtime lines follow each Workspace's files: ``ok: running berth=N`` (or
+    ``warn: running berth=N, checkout stamp M``), then ``ok (repaired at start): …`` and
+    ``warn: …`` per entrypoint repair and warning. A running Workspace then gets
+    ``ok: compose project <key>`` (or ``warn: runs as compose project <p>, expected <key>
+    (ADR-0017)``) and ``ok: ports loopback only`` (or one ``warn: <service> publishes
+    <addr>:<published>-><target>/<proto> on a non-loopback address (ADR-0003)`` per
+    publisher; ``*`` is an empty address). A stopped Workspace gets ``skipped: not running``
+    and an unreadable one ``skipped: runtime unreadable (<reason>)``. Under a Host's header,
+    ``warn: compose project <p> shared by <ws1>, <ws2> (ADR-0017)`` names each project two
+    or more running Workspaces share. Every ``warn`` counts toward the closing total. The
+    report is informational: callers exit 0.
     """
     out = console if console is not None else get_console()
     plain = not out.is_terminal
