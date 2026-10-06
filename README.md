@@ -50,10 +50,12 @@ architecture is recorded in
 ## Install
 
 ```bash
-uv tool install git+https://github.com/rinman24/billet
+uv tool install git+https://github.com/rinman24/billet@v0.5.0
 ```
 
-(PyPI publication is deferred; install from GitHub for now.)
+Install a tagged release. The latest is on the
+[Releases page](https://github.com/rinman24/billet/releases), and each release's notes name the
+Berth it ships. (PyPI publication is deferred; install from GitHub for now.)
 
 ### PATH setup
 
@@ -77,20 +79,29 @@ sourcing the file that was edited — check `echo $ZDOTDIR` and inspect your `.z
 
 ### Update
 
-Move an existing install to the latest `main` by re-running the install with
-`--force --reinstall`, then check what you actually got:
+Move an existing install to a newer release by installing at its tag, then check what you
+actually got:
 
 ```bash
-uv tool install --force --reinstall git+https://github.com/rinman24/billet
+uv tool install git+https://github.com/rinman24/billet@v0.5.0
 billet version
 ```
 
-`uv tool upgrade billet` is the shorter form and often works, but billet installs from an
-unpinned git URL whose requirement string is identical from one release to the next, so
-the upgrade can resolve out of uv's git cache and report success without changing
-anything. `--reinstall` ignores that cache, and `--force` lets the new build replace the
-existing `~/.local/bin/billet`. If `billet version` still reports the old number, run
-`uv cache clean billet` and install again.
+A new tag is a new requirement string, so uv builds the new release rather than resolving out
+of its git cache. `uv tool upgrade billet` does not move a tag-pinned install: it re-resolves
+the same tag.
+
+To run unreleased work from `main` instead, install the unpinned URL with `--force
+--reinstall`:
+
+```bash
+uv tool install --force --reinstall git+https://github.com/rinman24/billet
+```
+
+The unpinned requirement string never changes, so without `--reinstall` uv can resolve out of
+its git cache and report success without changing anything; `--force` lets the new build
+replace the existing `~/.local/bin/billet`. If `billet version` still reports the old number,
+run `uv cache clean billet` and install again.
 
 ## Usage
 
