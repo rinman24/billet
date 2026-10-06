@@ -103,8 +103,12 @@ implemented, and 5 is deferred again.
    service's running container and `docker logs` gives the entrypoint's lines. The pure
    `runtime_policy` engine turns them into a `RuntimeReport`: the running Berth against the
    checkout's stamp, and the Locker-ownership repairs and warnings. `doctor` never execs into a
-   container. The compose-file read ADR-0002 §1 would grant to `doctor` stays proposed: no check
-   opens a compose file yet.
+   container. *Compose project and published ports implemented (2026-10-05, A8):* one more
+   `docker compose ps --format json` per running Workspace, parsed in the access layer; the
+   pure `compose_policy` engine warns on a Workspace running under a project other than its
+   key, on a project two Workspaces on one Host share (ADR-0017), and on any port a container in
+   the project publishes on a non-loopback address (ADR-0003). The compose-file read ADR-0002
+   §1 would grant to `doctor` stays proposed: no check opens a compose file yet.
 5. **Start-time CONFORM readback and compose preflight.** Neither a `stat` of Locker ownership
    appended to the `start` script nor a `docker compose config -q` preflight for undeclared
    volumes ships in 0.4.0. Both are `doctor` checks first; `start` may reuse the read verb

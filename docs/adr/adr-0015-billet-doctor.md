@@ -24,6 +24,15 @@ service-scoped `ps` is no longer what keeps Workspaces that share a project apar
 stays scoped by service; it remains correct, and harmless, for a consumer that has not yet
 adopted ADR-0017 and still shares a project. No check changes.
 
+Extended 2026-10-05 (A8): two checks join the runtime report, both from one more
+`docker compose -f … ps --format json` per running Workspace (item 1). The compose project
+each Workspace's containers run under is checked against its registry key, and a project two
+running Workspaces on one Host share is warned at Host level
+([ADR-0017](adr-0017-one-compose-project-per-workspace.md) decision 4). Every port any container
+in the project publishes on a non-loopback address is warned
+([ADR-0003](adr-0003-workspace-port-binding-contract.md), amendment 2026-10-05). Both are
+`warn`, exit 0 (item 2). Still no compose file is opened (item 3).
+
 ## Context
 
 The split invariant ADR-0013 describes — one half authored in an image repository, the other in
@@ -67,7 +76,11 @@ never fail. No Dockerfile parsing.**
    `devcontainer.json`, with the parser `start` uses (*amended 2026-09-29*). Per Workspace, under
    the same compose prelude as `start` (`cd <repo_dir>`, billet's exports), it runs
    `docker compose -f … ps --status running -q <service>` and then
-   `docker logs <id> 2>&1 | grep '^dev-entrypoint: '`. The lookup is scoped by service name,
+   `docker logs <id> 2>&1 | grep '^dev-entrypoint: '`. When the service's container is
+   running it then runs `docker compose -f … ps --format json` with no service filter
+   (*amended 2026-10-05*, A8): every running container of the Workspace's compose project, in
+   its own nonce-delimited section, for the project and published-ports checks of item 2. The
+   compose files are passed by name, as before. The lookup is scoped by service name,
    so Workspaces that share a compose project name on one Host stay apart (*amended
    2026-10-01*: since [ADR-0017](adr-0017-one-compose-project-per-workspace.md) no two
    Workspaces should share one; the scope stays). A Workspace with no
@@ -107,8 +120,12 @@ never fail. No Dockerfile parsing.**
    |---|---|---|
    | Berth version stamp and Berth-file drift | `.devcontainer/` in the Host checkout; billet's side is the installed package's own copy of `templates/workspace/` (force-included into the wheel, read through `importlib.resources`, never a repo path) | the stamp: `ok`, or a `warn` reading `behind by N`, `ahead (upgrade billet)` for a consumer newer than a stale install, or `unknown` when `berth.version` is missing. Then per copied file (`dev-entrypoint.sh`, `sshd.conf`, `authorized_keys-stub`): `ok`; `warn: <file> missing` when the file is absent; or `warn: <file> directive drift (N lines)` followed by a unified diff of the *normalized* lines, capped at 20 lines with `… (M more)`. One unit counts throughout (*2026-09-30*): the changed line, `+` or `-`. `N`, the 20-line cap and `M` all count changed lines only, so the changed lines shown plus `M` equal `N`; the bare `@@` separator printed between hunks is not counted. The **directive hash** is ADR-0012 item 5 with its 2026-09-29 clarification: fold continuations, strip each line, drop blank lines, drop lines starting `#`. The two merged snippets (`Dockerfile.snippet`, `docker-compose.snippet.yml`) are not checked, and the report says so in one line: a snippet-subset check would false-positive on everything ADR-0003 grandfathered |
    | Runtime and Locker ownership (in effect 2026-09-29) | the entrypoint's own log (`docker logs` of the service's running container): its `berth=N` line and the ADR-0013 repair lines. Only the current run counts: a restarted container keeps its log, so the report reads from the last `berth=` line on. `doctor` never execs into a container | the running Berth against the checkout's stamp: `ok: running berth=N`, or a `warn` reading `running berth=N, checkout stamp M` (also for `berth=unknown` or a missing stamp) or `running berth not logged`. Each `repaired` line: `ok (repaired at start): <path> (was <owner>:<group> <mode>)`. Each `warning:` or `WARNING:` line: `warn:` and the entrypoint's own text, such as `warn: <path> owned by uid <n>; not repaired`. Other entrypoint lines (`created …`, `skipping …`) are informational and not printed. A stopped container: `skipped: not running`. A Workspace whose `devcontainer.json` cannot be read or parsed, or whose `docker compose ps` or `docker logs` fails: `skipped: runtime unreadable (<reason>)`. *Accepted limitation:* ownership that changes after start is not seen; nothing in the fleet does that |
+   | Compose project (in effect 2026-10-05, A8) | the `Project` of every container `docker compose -f … ps --format json` lists for a running Workspace, JSON lines (Compose v2.21 and later) or one JSON array (older Compose) | per running Workspace, `ok: compose project <key>`, or `warn: runs as compose project <p>, expected <key> (ADR-0017)` when its containers run under a project other than its registry key. Per Host, under the Host header and only on a hit, `warn: compose project <p> shared by <ws1>, <ws2> (ADR-0017)` for a project two or more running Workspaces claim. A Workspace that is not running contributes nothing and gets neither line. *Accepted limitation:* only running containers are seen, so a stopped Workspace sharing a project shows when it starts, which is also when the collision bites |
+   | Published ports (in effect 2026-10-05, A8) | the `Publishers` of the same `ps` output: every service in the project, sidecars included | `ok: ports loopback only`, or one `warn: <service> publishes <addr>:<published>-><target>/<proto> on a non-loopback address (ADR-0003)` per publisher. Loopback is the `URL` parsed with Python's `ipaddress` into `127.0.0.0/8` or `::1`, never string-matched. `PublishedPort` 0 (exposed, not published) is ignored. `0.0.0.0`, `::`, a specific non-loopback address, and an empty `URL` with a non-zero `PublishedPort` (rendered `*`) all warn. Under a shared project every Workspace's `ps` lists the others' containers, so a publisher is reported once per Host, de-duplicated by container `ID` and attributed to the first Workspace in registry order that listed it, naming the service and, when it is not the Workspace's own, the project. If the `ps` fails or will not parse, the Workspace takes `skipped: runtime unreadable (<reason>)`; its Berth results still print |
 
    The report header names the installed billet's version and the Berth version it ships.
+   Every `warn`, the compose-project and published-ports ones included, counts toward the
+   closing `N warnings` total; the exit status stays 0 (*2026-10-05*).
 
    **Deferred (2026-09-29): the two compose-reading scans leave this cycle,** to be reinstated
    when they have something to find:
