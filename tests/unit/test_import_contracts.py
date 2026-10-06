@@ -24,10 +24,14 @@ def _contracts() -> list[dict[str, Any]]:
 
 
 def _access_modules_on_disk() -> set[str]:
-    """Each access package, or each module of the package holding the shared leaf."""
+    """Each access package or single-file module; the leaf's package counts module by module."""
     found: set[str] = set()
     leaf_package, _, _ = _SHARED_LEAF.rpartition(".")
     for package in sorted(_ACCESS_ROOT.iterdir()):
+        if package.suffix == ".py" and package.is_file():
+            if package.stem != "__init__":
+                found.add(f"billet.access.{package.stem}")
+            continue
         if not (package / "__init__.py").is_file():
             continue
         name = f"billet.access.{package.name}"
