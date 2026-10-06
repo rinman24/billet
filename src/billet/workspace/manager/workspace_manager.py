@@ -27,6 +27,7 @@ from billet.contracts import (
     PackagedBerth,
     PlanObserver,
     RemoteHost,
+    SharedProject,
     SourceAccess,
     SshConfigAccess,
     SshConfigBlock,
@@ -38,7 +39,7 @@ from billet.contracts import (
 )
 from billet.infrastructure import ssh
 from billet.shared.errors import BilletError, HostOperationError, ProcessTimeoutError
-from billet.workspace.engine import berth_policy, runtime_policy
+from billet.workspace.engine import berth_policy, compose_policy, runtime_policy
 from billet.workspace.engine.placement import HostPlacementPolicy
 from billet.workspace.engine.port_allocator import PortAllocator
 from billet.workspace.engine.ssh_config_engine import SshConfigEngine
@@ -333,7 +334,9 @@ class WorkspaceManager:
         skipped as timed out (D-A7-3); any other probe fault skips that Host with its message,
         so one bad Host never hides the rest. Each Workspace's runtime is
         read from its entrypoint's log and its running Berth compared with the checkout's
-        stamp (D-A4-8). ``doctor`` never mutates.
+        stamp (D-A4-8). Each running Workspace's compose project is compared with its key,
+        projects shared on a Host are collected, and every non-loopback publish in a project
+        is reported once per Host (A8, ``compose_policy``). ``doctor`` never mutates.
         """
         groups: dict[str, list[tuple[WorkspaceSpec, RemoteHost]]] = {}
         for spec, remote in items:
@@ -344,6 +347,7 @@ class WorkspaceManager:
             groups.setdefault(spec.host, []).append((spec, remote))
         statuses: list[BerthStatus] = []
         skipped: list[DoctorSkip] = []
+        shared: list[SharedProject] = []
         for host, members in groups.items():
             specs = [spec for spec, _ in members]
             keys = tuple(spec.key for spec in specs)
@@ -360,12 +364,20 @@ class WorkspaceManager:
                 reason = f"probe failed: {_first_line(exc)}"
                 skipped.append(DoctorSkip(host=host, reason=reason, workspaces=keys))
                 continue
+            compose, host_shared = compose_policy.assess_host(
+                host, [(spec.key, probe.runtime) for spec, probe in zip(specs, probes, strict=True)]
+            )
+            shared.extend(host_shared)
             for spec, probe in zip(specs, probes, strict=True):
                 status = berth_policy.assess(probe.berth, berth, host=host, repo_dir=spec.repo_dir)
                 runtime = runtime_policy.assess_runtime(probe.runtime, status.stamp.found)
+                runtime = replace(runtime, compose=compose.get(spec.key))
                 statuses.append(replace(status, runtime=runtime))
         return DoctorReport(
-            berth_version=berth.version, statuses=tuple(statuses), skipped=tuple(skipped)
+            berth_version=berth.version,
+            statuses=tuple(statuses),
+            skipped=tuple(skipped),
+            shared_projects=tuple(shared),
         )
 
     # --- ssh-config ----------------------------------------------------------------
