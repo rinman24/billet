@@ -52,7 +52,7 @@ reads and writes across every one of these boundaries is ADR-0014.
 
 ## Live consumer inventory
 
-Verified 2026-10-06 against each consumer's `origin/main` and by `billet doctor` 0.5.0 on the
+Verified 2026-10-05 against each consumer's `origin/main` and by `billet doctor` 0.5.0 on the
 Host: all four Workspaces are on Berth 2, the Berth billet 0.5.0 ships, and each runs
 `berth=2` with every published port on loopback. Each moved to Berth 2 by re-copying
 `dev-entrypoint.sh` and `berth.version` (see the revision log in `templates/workspace/README.md`).
