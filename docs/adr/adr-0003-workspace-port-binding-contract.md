@@ -240,9 +240,10 @@ same PR. The template README's revision log carries the Berth 2 row.
 
 The decision above binds one port, the container's sshd, to `127.0.0.1`. Nothing said the
 same of the other ports a Workspace's compose publishes, and sidecars publish them too:
-gswa-backend's `sql` publishes `5432` (on `127.0.0.1`, as it happens). A port published on `0.0.0.0` or `::` listens on
-every interface the Host has, guarded only by network policy billet does not own (ADR-0005),
-not by the `ProxyJump` this ADR's loopback port is reached through. From this amendment the rule covers **every port published by any container in a
+gswa-backend's `sql` publishes `5432` (on `127.0.0.1`, as it happens). A port published on
+`0.0.0.0` or `::` listens on every interface the Host has, guarded only by network policy
+billet does not own (ADR-0005), not by the `ProxyJump` this ADR's loopback port is reached
+through. From this amendment the rule covers **every port published by any container in a
 Workspace's compose project**: the main service and every sidecar bind their published ports
 to a loopback address.
 

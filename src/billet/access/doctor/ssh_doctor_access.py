@@ -109,7 +109,11 @@ class ProbeMarkers:
 
     @property
     def runtime_failed(self) -> str:
-        """The line a runtime section ends with when ``docker compose ps`` or ``docker logs`` failed."""
+        """The line ending a Workspace's runtime part when one of its docker commands failed.
+
+        It lands in whichever section was open: the runtime section when ``ps -q`` or
+        ``docker logs`` failed, the compose section when ``ps --format json`` did.
+        """
         return f"runtime probe failed@{self.nonce}"
 
     @property

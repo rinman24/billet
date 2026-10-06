@@ -2,10 +2,10 @@
 
 The process runner is mocked (never a real ``ssh``); parsing runs over recorded probe
 output, including the real gswa-backend ``docker compose ps --format json`` captured
-read-only from the Host on 2026-10-05 (``fixtures/``). Two tests also run the generated scripts through a local ``bash -se`` against a
-temporary home — the second through the real ``SubprocessRunner.converse`` with a stub
-``docker`` on ``PATH`` — proving the markers, the framing and the runtime part on a real
-shell without touching any Host.
+read-only from the Host on 2026-10-05 (``fixtures/``). Two tests also run the generated
+scripts through a local ``bash -se`` against a temporary home — the second through the real
+``SubprocessRunner.converse`` with a stub ``docker`` on ``PATH`` — proving the markers, the
+framing and the runtime part on a real shell without touching any Host.
 """
 
 from collections.abc import Callable, Sequence

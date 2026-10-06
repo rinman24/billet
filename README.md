@@ -128,8 +128,9 @@ the Berth the container started with and the entrypoint's ownership repairs, and
 the Workspace runs under a compose project other than its key or shares one with a sibling
 ([ADR-0017](docs/adr/adr-0017-one-compose-project-per-workspace.md)), and when any container in
 its project publishes a port on a non-loopback address
-([ADR-0003](docs/adr/adr-0003-workspace-port-binding-contract.md)). The templates ship inside the wheel, so run
-it from an installed billet; an editable checkout (`uv run`) does not carry them.
+([ADR-0003](docs/adr/adr-0003-workspace-port-binding-contract.md)). The templates ship inside
+the wheel, so run it from an installed billet; an editable checkout (`uv run`) does not carry
+them.
 
 The compose `service`, compose file(s), `workspaceFolder`, `remoteUser`, and
 `postCreateCommand` are read live from each repo's `.devcontainer/devcontainer.json` — billet
