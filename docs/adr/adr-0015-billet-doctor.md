@@ -86,9 +86,10 @@ never fail. No Dockerfile parsing.**
    distinct from unreachable (ssh connected; the probe stalled). *Amended 2026-10-05:* the
    deadline bounds every wait of the conversation, the writes to ssh's stdin and the reads after
    ssh exits included. ssh runs in a session of its own, and the deadline, an error or an
-   interrupt kills its whole process group. Once ssh exits, billet reads what is left on its
-   pipes for a grace of at most 2 s, then closes them, so a process ssh left holding them (a
-   `ControlPersist` master, say) cannot hold `doctor`, and ssh's own exit status decides the
+   interrupt kills its whole process group, even when ssh itself has already exited. Once ssh
+   exits and the conversation ends normally, billet reads what is left on its pipes for a grace
+   of at most 2 s, then closes them without killing anything, so a process ssh left holding them
+   (a `ControlPersist` master, say) cannot hold `doctor`, and ssh's own exit status decides the
    result. The deadline is a constant, with no flag. Every in-band marker
    of the probe carries a nonce drawn at random for each run: the section headers
    (`===<section>@<nonce>===`), the missing-value marker, the end-of-reads sentinel that

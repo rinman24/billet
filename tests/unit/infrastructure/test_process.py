@@ -8,7 +8,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import IO, Any
 
 import pytest
 
@@ -353,6 +353,44 @@ def test_a_raising_reply_kills_the_whole_process_group(spawned: _Spawned, orphan
         SubprocessRunner().converse(argv, opening="", sentinel="END", reply=reply)
     assert [child.returncode for child in spawned] == [-signal.SIGKILL]
     assert all(_wait_gone(pid) for pid in _orphan_pids(orphans))  # the grandchild too
+
+
+def test_a_raising_reply_kills_the_group_of_a_command_already_reaped(
+    spawned: _Spawned, killpg_calls: list[tuple[int, int]], orphans: Path
+) -> None:
+    # The command prints the sentinel and exits at once, leaving a grandchild in its group.
+    # The reply reaps the command before it raises (as the loop's own poll can, when the
+    # exit lands before billet reads the sentinel line), so the group outlives its leader.
+    def reply(_out: str) -> str:
+        spawned[0].wait(timeout=5)
+        raise RuntimeError("reply failed")
+
+    argv = ["sh", "-c", '(sleep 30 & echo $! >> "$1"); echo END; exit 0', "sh", str(orphans)]
+    with pytest.raises(RuntimeError, match="reply failed"):
+        SubprocessRunner().converse(argv, opening="", sentinel="END", reply=reply)
+    assert [child.returncode for child in spawned] == [0]  # reaped before the cleanup
+    assert killpg_calls == [(spawned[0].pid, signal.SIGKILL)]
+    assert all(_wait_gone(pid) for pid in _orphan_pids(orphans))  # the grandchild is killed
+
+
+def test_a_failed_setup_after_popen_kills_and_reaps_the_command(
+    spawned: _Spawned, killpg_calls: list[tuple[int, int]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(_fd: int, _blocking: bool) -> None:
+        raise OSError("set_blocking failed")
+
+    monkeypatch.setattr(os, "set_blocking", fail)
+    with pytest.raises(OSError, match="set_blocking failed"):
+        SubprocessRunner().converse(
+            ["sh", "-c", "exec sleep 60"], opening="", sentinel="END", reply=lambda _o: ""
+        )
+    assert [child.returncode for child in spawned] == [-signal.SIGKILL]  # killed and reaped
+    assert killpg_calls == [(spawned[0].pid, signal.SIGKILL)]
+    assert all(stream is None or stream.closed for stream in _pipes(spawned[0]))
+
+
+def _pipes(proc: subprocess.Popen[bytes]) -> tuple[IO[bytes] | None, ...]:
+    return (proc.stdin, proc.stdout, proc.stderr)
 
 
 # --- converse: processes the command leaves behind (D-A8-6) -----------------------------

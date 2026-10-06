@@ -106,11 +106,12 @@ class ConversationRunner(Protocol):
         ``timeout`` (seconds, optional) bounds the whole conversation, opening through exit,
         every read and write included: on expiry the command's process group is killed, the
         command is reaped and :class:`ProcessTimeoutError` is raised. If ``reply`` (or anything
-        else mid-conversation, ``KeyboardInterrupt`` included) raises, the group is killed and
-        the command reaped too, and the exception propagates. Once the command has exited,
-        whatever still holds its pipes (a process it left behind) gets a short grace and is
-        then abandoned: the call returns the command's own result and never waits on a
-        process it did not start.
+        else between starting the command and the result, ``KeyboardInterrupt`` included)
+        raises, the group is killed and the command reaped too, even if the command itself
+        has already exited, and the exception propagates. After a command that exits and a
+        conversation that ends normally, whatever still holds its pipes (a process it left
+        behind) gets a short grace and is then abandoned, not killed: the call returns the
+        command's own result and never waits on a process it did not start.
         """
         ...
 
@@ -188,20 +189,26 @@ class SubprocessRunner:
             start_new_session=True,
         )
         stop_at = None if timeout is None else time.monotonic() + timeout
-        exchange = _Exchange(proc, opening=opening, sentinel=sentinel, reply=reply)
+        exchange: _Exchange | None = None
         exited = False
         try:
+            exchange = _Exchange(proc, opening=opening, sentinel=sentinel, reply=reply)
             exited = exchange.run(stop_at, self._exit_grace)
         finally:
-            # One cleanup for every exit: the deadline, a raising reply, an interrupt, or a
-            # finish. billet's pipe ends close first, so nothing more is read or written.
-            exchange.close()
+            # One cleanup for every exit after Popen: the deadline, a raising reply, an
+            # interrupt, a failed setup, or a finish. billet's pipe ends close first, so
+            # nothing more is read or written.
+            if exchange is not None:
+                exchange.close()
+            else:
+                _close_pipes(proc)
             if not exited:
                 _kill_group(proc)
             # Bounded: the command has exited (and is reaped), or was just killed.
             returncode = proc.wait()
         if timeout is not None and not exited:
             raise ProcessTimeoutError(argv, timeout)
+        assert exchange is not None  # run() returned, so the exchange was built
         return CompletedProcess(
             argv=tuple(argv),
             returncode=returncode,
@@ -294,12 +301,7 @@ class _Exchange:
     def close(self) -> None:
         """Close the selector and billet's pipe ends; anything unread or unsent is dropped."""
         self._selector.close()
-        for stream in (self._proc.stdin, self._proc.stdout, self._proc.stderr):
-            if stream is not None:
-                # Writes go to the raw fd, so no buffer is left to flush; suppressed all the
-                # same, as cleanup must never mask the exception that brought it here.
-                with contextlib.suppress(OSError):
-                    stream.close()
+        _close_pipes(self._proc)
         self._stdin = None
 
     def _advance(self) -> None:
@@ -369,15 +371,27 @@ class _Exchange:
 
 
 def _kill_group(proc: subprocess.Popen[bytes]) -> None:
-    """SIGKILL the command's whole process group, unless the command has been reaped.
+    """SIGKILL the command's whole process group, whether or not the command was reaped.
 
-    The group's id is the command's pid (``start_new_session``). Once the command is reaped
-    that id can be reused, so a reaped command's group is left alone: billet signals only
-    processes it started.
+    The group's id is the command's pid (``start_new_session``). A command that exited and
+    was reaped mid-conversation can leave members behind, and the group lives on while it
+    has any: POSIX does not reuse a pid as a group id while that group has members, so the
+    signal reaches only processes the command started. A group with no members left is
+    gone (``ProcessLookupError``); macOS answers ``PermissionError`` for a group of zombies
+    alone, which is gone just the same.
     """
-    if proc.returncode is None:
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(proc.pid, signal.SIGKILL)
+
+
+def _close_pipes(proc: subprocess.Popen[bytes]) -> None:
+    """Close billet's ends of the command's pipes; anything unread or unsent is dropped."""
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is not None:
+            # Writes go to the raw fd, so no buffer is left to flush; suppressed all the
+            # same, as cleanup must never mask the exception that brought it here.
+            with contextlib.suppress(OSError):
+                stream.close()
 
 
 def _pump(stream: IO[str], sink: list[str], on_line: OnLine) -> None:
