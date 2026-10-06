@@ -17,6 +17,12 @@ consumer lists them in `BILLET_ENV_PUBLISH` — see
 [Amendment (2026-09-30)](#amendment-2026-09-30-credential-shaped-variables-are-withheld-berth-2)
 below.
 
+Amended (2026-10-05, A8): the loopback rule extends from the sshd mapping to every port
+published by any container in a Workspace's compose project, and `billet doctor` warns on a
+breach — see
+[Amendment (2026-10-05)](#amendment-2026-10-05-every-published-port-is-loopback-warned-by-doctor)
+below.
+
 ## Context
 
 billet reaches each Workspace's container through a distinct loopback port on the shared
@@ -229,3 +235,41 @@ As in 2026-09-04, a repo gains this only by re-copying `dev-entrypoint.sh` and
 `berth.version` (Berth 2), and the change goes live on the next fresh container start. A
 repo whose ssh sessions need a withheld variable lists it in `BILLET_ENV_PUBLISH` in the
 same PR. The template README's revision log carries the Berth 2 row.
+
+## Amendment (2026-10-05): every published port is loopback, warned by `doctor`
+
+The decision above binds one port, the container's sshd, to `127.0.0.1`. Nothing said the
+same of the other ports a Workspace's compose publishes, and sidecars publish them too:
+gswa-backend's `sql` publishes `5432` (on `127.0.0.1`, as it happens). A port published on
+`0.0.0.0` or `::` listens on every interface the Host has, guarded only by network policy
+billet does not own (ADR-0005), not by the `ProxyJump` this ADR's loopback port is reached
+through. From this amendment the rule covers **every port published by any container in a
+Workspace's compose project**: the main service and every sidecar bind their published ports
+to a loopback address.
+
+### What counts
+
+- A publisher is **loopback** when its address parses, with Python's `ipaddress`, into
+  `127.0.0.0/8` or `::1`. It is parsed, never string-matched.
+- A port a container **exposes but does not publish** (`PublishedPort` 0 in
+  `docker compose ps --format json`, such as gswa-backend's `redis`) is not a publish and is
+  not checked.
+- Anything else **breaches** the rule: `0.0.0.0`, `::`, a specific non-loopback address, and a
+  publish with no address (an empty `URL` with a non-zero `PublishedPort`).
+
+### How it is enforced: warned, not refused
+
+`billet doctor` reads the `Publishers` of every running container in each running
+Workspace's project, from one `docker compose ps --format json`
+([ADR-0015](adr-0015-billet-doctor.md) items 1 and 2), and prints one
+`warn: <service> publishes <addr>:<published>-><target>/<proto> on a non-loopback address
+(ADR-0003)` per breach, or `ok: ports loopback only`. It is a warning and the exit status stays
+0. A publisher two Workspaces' `ps` both list, under a shared compose project, is reported once.
+`billet start` does not refuse a breach, billet does not rewrite a consumer's `ports:`, and
+`doctor` sees only running containers.
+
+### What does not change
+
+The `BILLET_CONTAINER_SSH_PORT` contract, its `2222` default, and billet's role as a reader and
+parameterizer of the consumer's compose, never an editor of it. A consumer brings a breaching
+`ports:` entry within the rule by prefixing it with `127.0.0.1:`, in its own repository.

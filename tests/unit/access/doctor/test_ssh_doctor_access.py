@@ -1,13 +1,15 @@
 """Tests for SshDoctorAccess — one probe per Host, its command set, and section parsing.
 
 The process runner is mocked (never a real ``ssh``); parsing runs over recorded probe
-output. Two tests also run the generated scripts through a local ``bash -se`` against a
-temporary home — the second through the real ``SubprocessRunner.converse`` with a stub
-``docker`` on ``PATH`` — proving the markers, the framing and the runtime part on a real
-shell without touching any Host.
+output, including the real gswa-backend ``docker compose ps --format json`` captured
+read-only from the Host on 2026-10-05 (``fixtures/``). Two tests also run the generated
+scripts through a local ``bash -se`` against a temporary home — the second through the real
+``SubprocessRunner.converse`` with a stub ``docker`` on ``PATH`` — proving the markers, the
+framing and the runtime part on a real shell without touching any Host.
 """
 
 from collections.abc import Callable, Sequence
+import json
 import os
 from pathlib import Path
 import re
@@ -16,6 +18,7 @@ import subprocess
 
 import pytest
 
+from billet.access.doctor.compose_ps import ComposePsError, parse_compose_ps
 from billet.access.doctor.ssh_doctor_access import (
     ProbeMarkers,
     SshDoctorAccess,
@@ -24,7 +27,14 @@ from billet.access.doctor.ssh_doctor_access import (
     reads_script,
     runtime_script,
 )
-from billet.contracts import BerthFileState, DevcontainerFacts, RuntimeState, WorkspaceSpec
+from billet.contracts import (
+    BerthFileState,
+    ComposeContainer,
+    DevcontainerFacts,
+    PortPublisher,
+    RuntimeState,
+    WorkspaceSpec,
+)
 from billet.infrastructure.process import CompletedProcess, SubprocessRunner
 from billet.shared.errors import HostOperationError, ProcessError, ProcessTimeoutError
 from billet.workspace.engine import berth_policy
@@ -47,6 +57,12 @@ _DEVCONTAINER_JSON = """\
   "remoteUser": "dev",
 }
 """
+
+# `docker compose -f .devcontainer/docker-compose.yml ps --format json` in gswa-backend's
+# checkout on the devbox Host, captured read-only 2026-10-05 (Compose v5.1.4, JSON lines; four
+# services, all project gswa-backend; FA8-10). Verbatim: it carries no environment values.
+_FIXTURES = Path(__file__).parent / "fixtures"
+_GSWA_PS = (_FIXTURES / "gswa-backend-compose-ps-2026-10-05.jsonl").read_text()
 
 # Recorded from the probe's shape: gswa-backend has every file and a running container,
 # genshift-brand lacks sshd.conf, its berth.version has no trailing newline (the extra `echo`
@@ -87,6 +103,8 @@ exec sleep infinity
 {_M.running}3f2a9c1d
 dev-entrypoint: berth=1
 dev-entrypoint: publishing the container environment to /etc/environment for sshd login shells
+===compose:gswa-backend@{_N}===
+{_GSWA_PS.rstrip()}
 ===runtime:genshift-brand@{_N}===
 {_M.not_running}
 """
@@ -178,6 +196,40 @@ def test_the_runtime_part_runs_only_compose_ps_and_docker_logs_never_exec() -> N
     assert "fetch" not in script and "sudo" not in script
 
 
+def _docker_commands(script: str) -> list[str]:
+    """Each docker invocation in ``script``, from ``docker`` up to its redirect or pipe."""
+    return [m.group(0).strip() for m in re.finditer(r"docker [^<|)]*", script)]
+
+
+def test_the_host_commands_are_a7s_plus_one_project_ps_per_workspace() -> None:
+    """S2-1: A7's ps and logs, plus `ps --format json` (no service filter) per Workspace."""
+    facts = {"gswa-backend": _facts("gswa-backend"), "genshift-brand": _facts("genshift-brand")}
+    script = runtime_script([GSWA, BRAND], REMOTE, facts, _M)
+    flags = "-f .devcontainer/docker-compose.yml"
+    assert _docker_commands(script) == [
+        f"docker compose {flags} ps --status running -q gswa-backend",
+        'docker logs "$id" 2>&1',
+        f"docker compose {flags} ps --format json",
+        f"docker compose {flags} ps --status running -q genshift-brand",
+        'docker logs "$id" 2>&1',
+        f"docker compose {flags} ps --format json",
+    ]
+    reads = reads_script([GSWA, BRAND], _M)
+    assert "docker-compose" not in reads and "compose.y" not in reads  # no compose file read
+    for word in (" inspect", " port", " exec", "config"):
+        assert word not in script + reads
+    assert script.count("ps --format json </dev/null") == 2  # stdin never the script
+
+
+def test_the_project_ps_runs_after_the_service_is_found_running_in_its_own_section() -> None:
+    script = runtime_script([GSWA], REMOTE, {"gswa-backend": _facts("gswa-backend")}, _M)
+    lines = script.splitlines()
+    not_running = next(i for i, line in enumerate(lines) if _M.not_running in line)
+    header = lines.index(f"echo ===compose:gswa-backend@{_N}===")
+    assert not_running < header
+    assert lines[header + 1].endswith("ps --format json </dev/null")
+
+
 def test_the_ps_names_the_service_under_the_compose_prelude() -> None:
     """D18: Workspaces sharing compose project `devcontainer` stay apart by service."""
     script = runtime_script([GSWA], REMOTE, {"gswa-backend": _facts("gswa-backend")}, _M)
@@ -210,6 +262,13 @@ def test_parse_recorded_output_including_missing_files_and_a_non_checkout() -> N
 def test_parse_the_runtime_sections() -> None:
     gswa, brand = parse_probe_output(_RECORDED, [GSWA, BRAND], _M)
     assert gswa.runtime.state is RuntimeState.RUNNING
+    assert [c.service for c in gswa.runtime.containers] == [
+        "gswa-backend",
+        "gswa-outbox-worker",
+        "redis",
+        "sql",
+    ]
+    assert brand.runtime.containers == ()
     assert gswa.runtime.log_lines == (
         "dev-entrypoint: berth=1",
         "dev-entrypoint: publishing the container environment to /etc/environment for sshd "
@@ -227,6 +286,22 @@ def test_a_failed_runtime_probe_or_missing_devcontainer_json_is_unreadable() -> 
     (read,) = parse_probe_output("", [GSWA], _M)
     assert read.runtime.state is RuntimeState.UNREADABLE
     assert read.runtime.reason == ".devcontainer/devcontainer.json missing"
+
+
+def test_a_running_workspace_whose_project_ps_fails_or_will_not_parse_is_unreadable() -> None:
+    """D-A8-13: the runtime is skipped as unreadable; the Berth read still stands."""
+    compose = f"===compose:gswa-backend@{_N}===\n{_GSWA_PS.rstrip()}\n"
+    cases = {
+        "docker compose ps --format json failed": f"{compose}{_M.runtime_failed}\n",
+        "docker compose ps --format json: invalid JSON": compose.replace("{", "<", 1),
+        "docker compose ps --format json listed no container": compose.split("\n", 1)[0] + "\n",
+        "no compose ps output": "",
+    }
+    for reason, replacement in cases.items():
+        gswa, _ = parse_probe_output(_RECORDED.replace(compose, replacement), [GSWA, BRAND], _M)
+        assert gswa.runtime.state is RuntimeState.UNREADABLE, reason
+        assert (gswa.runtime.reason or "").startswith(reason), gswa.runtime.reason
+        assert gswa.berth.head == "d223cd5"  # the Berth results still print
 
 
 def test_an_invalid_devcontainer_json_is_unreadable_with_the_parse_error() -> None:
@@ -295,11 +370,16 @@ def test_the_reads_script_runs_under_a_real_bash(tmp_path: Path) -> None:
 
 
 # A stand-in `docker`: records each argv, answers `compose ps` per service (two ids for
-# gswa-backend, none for billet, a failure for squadra) and `logs` on both streams.
+# gswa-backend, none for billet, a failure for squadra), the project `ps` as JSON lines,
+# and `logs` on both streams.
 _STUB_DOCKER = """\
 #!/usr/bin/env bash
 echo "$*" >> "$DOCKER_ARGV_LOG"
 case "$*" in
+  *" ps --format json")
+    if [ -n "${DOCKER_PS_JSON_FAILS:-}" ]; then echo "ps failed" >&2; exit 1; fi
+    echo '{"ID":"aaa111","Project":"gswa-backend","Service":"gswa-backend","Publishers":[]}'
+    ;;
   *" ps "*gswa-backend) printf 'aaa111\\nbbb222\\n' ;;
   *" ps "*billet) ;;
   *" ps "*squadra) echo "no such file" >&2; exit 1 ;;
@@ -317,6 +397,7 @@ esac
 _EXPECTED_DOCKER_CALLS = [
     "compose -f .devcontainer/docker-compose.yml ps --status running -q gswa-backend",
     "logs aaa111",
+    "compose -f .devcontainer/docker-compose.yml ps --format json",
     "compose -f .devcontainer/docker-compose.yml ps --status running -q billet",
     "compose -f .devcontainer/docker-compose.yml ps --status running -q squadra",
 ]
@@ -368,6 +449,26 @@ def test_the_whole_conversation_runs_under_a_real_bash(
         "dev-entrypoint: repaired /home/dev/.claude (was root:root 755)",
         "dev-entrypoint: WARNING: could not write /etc/environment; x",
     )
+    assert gswa.runtime.containers == (
+        ComposeContainer("aaa111", "gswa-backend", "gswa-backend", ()),
+    )
+    assert billet.runtime.state is RuntimeState.NOT_RUNNING
+    assert squadra.runtime.state is RuntimeState.UNREADABLE
+    assert argv_log.read_text().splitlines() == _EXPECTED_DOCKER_CALLS
+
+
+def test_a_failing_project_ps_under_a_real_bash_is_unreadable_and_ends_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure marker lands in the compose section; later Workspaces still run."""
+    specs, argv_log = _stub_host(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOCKER_PS_JSON_FAILS", "1")
+
+    gswa, billet, squadra = SshDoctorAccess(_LocalBash()).probe(REMOTE, specs)
+
+    assert gswa.runtime.state is RuntimeState.UNREADABLE
+    assert gswa.runtime.reason == "docker compose ps --format json failed"
+    assert gswa.berth.head is not None
     assert billet.runtime.state is RuntimeState.NOT_RUNNING
     assert squadra.runtime.state is RuntimeState.UNREADABLE
     assert argv_log.read_text().splitlines() == _EXPECTED_DOCKER_CALLS
@@ -436,3 +537,60 @@ def test_marker_shaped_consumer_lines_are_file_content_and_spoof_nothing(
     assert billet.runtime.state is RuntimeState.NOT_RUNNING
     assert squadra.runtime.state is RuntimeState.UNREADABLE
     assert argv_log.read_text().splitlines() == _EXPECTED_DOCKER_CALLS
+
+
+# --- `docker compose ps --format json` (A8, D-A8-13) -------------------------------------
+
+
+def test_parse_the_recorded_gswa_backend_ps_json_lines() -> None:
+    """FA8-10: four services, one project, sshd and sql on loopback, redis only exposed."""
+    containers = {c.service: c for c in parse_compose_ps(_GSWA_PS)}
+    assert set(containers) == {"gswa-backend", "gswa-outbox-worker", "redis", "sql"}
+    assert {c.project for c in containers.values()} == {"gswa-backend"}
+    assert containers["gswa-backend"].publishers == (PortPublisher("127.0.0.1", 22, 2222, "tcp"),)
+    assert containers["sql"].publishers == (PortPublisher("127.0.0.1", 5432, 5432, "tcp"),)
+    assert containers["redis"].publishers == (PortPublisher("", 6379, 0, "tcp"),)
+    assert containers["gswa-outbox-worker"].publishers == ()
+    assert containers["gswa-backend"].id == "bc584ed6d28d"
+
+
+def test_parse_the_json_array_older_compose_prints() -> None:
+    lines = [json.loads(line) for line in _GSWA_PS.splitlines()]
+    assert parse_compose_ps(json.dumps(lines)) == parse_compose_ps(_GSWA_PS)
+    assert parse_compose_ps("[]") == ()
+
+
+def test_null_or_absent_publishers_read_as_none() -> None:
+    text = (
+        '{"ID":"a","Project":"p","Service":"s","Publishers":null}\n'
+        '{"ID":"b","Project":"p","Service":"t"}\n'
+    )
+    assert [c.publishers for c in parse_compose_ps(text)] == [(), ()]
+
+
+def test_blank_ps_output_is_no_containers() -> None:
+    assert parse_compose_ps("") == ()
+    assert parse_compose_ps("\n\n") == ()
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        ("not json", "invalid JSON"),
+        ('{"ID":"a","Project":"p"', "invalid JSON"),
+        ('"a string"', "not a JSON object"),
+        ('{"a":1}', "ID missing or not a string"),
+        ('{"ID":"a","Project":"p","Service":""}', "Service missing or not a string"),
+        ('{"ID":"a","Project":"p","Service":"s","Publishers":{}}', "Publishers is not a list"),
+        ('{"ID":"a","Project":"p","Service":"s","Publishers":[1]}', "not a JSON object"),
+        (
+            '{"ID":"a","Project":"p","Service":"s","Publishers":[{"URL":"","TargetPort":"80",'
+            '"PublishedPort":0,"Protocol":"tcp"}]}',
+            "TargetPort missing or not an integer",
+        ),
+        ('[{"ID":"a","Project":"p","Service":"s"}, 3]', "not a JSON object"),
+    ],
+)
+def test_malformed_ps_output_raises_with_a_short_reason(text: str, reason: str) -> None:
+    with pytest.raises(ComposePsError, match=reason):
+        parse_compose_ps(text)

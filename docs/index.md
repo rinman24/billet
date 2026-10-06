@@ -50,8 +50,12 @@ them ([ADR-0013](adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)). 
 may write into a container it started, and what it never writes — anything a build reads — is
 the definition/state boundary of [ADR-0014](adr/adr-0014-definition-versus-state.md). The
 `doctor` verb reports each Workspace's Berth drift against the Berth the installed billet
-ships, over one SSH session per Host ([ADR-0015](adr/adr-0015-billet-doctor.md)); its runtime
-report (container state and the entrypoint's Locker-ownership log) is next.
+ships, over one SSH session per Host ([ADR-0015](adr/adr-0015-billet-doctor.md)). For each
+running Workspace it then reports the Berth the container started with and the entrypoint's
+Locker-ownership repairs and warnings, read from the container's log, and warns on a compose
+project other than the Workspace's key or shared with a sibling
+([ADR-0017](adr/adr-0017-one-compose-project-per-workspace.md)) and on any port published on a
+non-loopback address ([ADR-0003](adr/adr-0003-workspace-port-binding-contract.md)).
 
 ## Status
 

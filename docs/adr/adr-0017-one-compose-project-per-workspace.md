@@ -16,6 +16,12 @@ Governs consumer compose files and billet's templates and docs only. No billet c
 no `doctor` check, and no Berth change: the three hashed Berth files are untouched and
 `berth.version` stays `2`.
 
+Amended (2026-10-05, A8): the rule is now warned by `billet doctor`
+([ADR-0015](adr-0015-billet-doctor.md) item 2). A running Workspace whose containers run
+under a compose project other than its key, and a project two running Workspaces on one Host
+share, are each a `warn`, exit 0. `billet start` still refuses nothing. Decision 4 and the
+Consequences say so below. Still no Berth change.
+
 ## Context
 
 Compose names a project after the directory of its first compose file unless the file or the
@@ -63,10 +69,17 @@ each Workspace has its own project, the prefix doubles on the Host (`billet_bill
    `redis-data` → `redis_data`). The canonical keys are the Lockers `claude_home`, `azure_home`
    and `gh_config`, and `sshd_keys` (Berth infrastructure, not a Locker); a consumer's own data
    volumes follow the same rule (gswa-backend's `postgres_data` and `redis_data`).
-4. **Documented, not guarded.** billet adds no `doctor` check for two Workspaces sharing a
-   project on one Host, and `billet start` does not refuse a project named `devcontainer`. The
-   rule lives in this ADR, the templates and the adoption guide; billet's template tests hold
-   billet's own compose file and its snippets to it.
+4. **Documented and warned, not guarded** (*amended 2026-10-05*, A8; was "Documented, not
+   guarded", with no `doctor` check). `billet doctor` reads the `Project` of each running
+   Workspace's containers from one `docker compose ps --format json` and warns, exit 0, when
+   a Workspace runs under a project other than its key
+   (`warn: runs as compose project <p>, expected <key> (ADR-0017)`), and, once per Host, when
+   two or more running Workspaces share a project
+   (`warn: compose project <p> shared by <ws1>, <ws2> (ADR-0017)`). The first catches a
+   missing or wrong `name:` before a sibling collides. `doctor` sees only running containers,
+   and opens no compose file. `billet start` still does not refuse a project named
+   `devcontainer`, or any other. The rule lives in this ADR, the templates and the adoption
+   guide; billet's template tests hold billet's own compose file and its snippets to it.
 5. **VS Code by Remote-SSH or Attach, not Reopen.** The devcontainer CLI honours a top-level
    compose `name:`, so after this ADR it resolves the same project as billet. Dev Containers
    "Reopen in Container" on a billet Host checkout would recreate the Workspace's container
@@ -107,7 +120,8 @@ each Workspace in one sitting: merge, `billet stop`, copy, `billet start`, check
   needs no `berth.version` bump.
 - A consumer that has not adopted the rule keeps working under billet exactly as before, still
   sharing `devcontainer` with any sibling that has not either. Nothing detects it; a `doctor`
-  warning for a shared project is left to a later cycle.
+  warning for a shared project is left to a later cycle. *Amended 2026-10-05 (A8):* `doctor`
+  now detects it while the Workspace runs (decision 4) and warns; `start` is unchanged.
 
 ## Alternatives considered
 
@@ -128,7 +142,8 @@ each Workspace in one sitting: merge, `billet stop`, copy, `billet start`, check
   volume name doubles its prefix. Rejected by the operator in favour of the extra scope.
 - **A `doctor` warning for two Workspaces sharing a project on one Host**, or **`billet start`
   refusing a project named `devcontainer`.** Rejected for now: both are code, this change is
-  docs only, and the warning belongs with later `doctor` work.
+  docs only, and the warning belongs with later `doctor` work. *Amended 2026-10-05 (A8):* the
+  `doctor` warning has landed (decision 4); `start` refusing a project stays out of scope.
 - **Amending ADR-0012 alone.** Rejected: the rule spans the Lockers of ADR-0006 and ADR-0011
   and the shared-project reasoning of ADR-0015; one ADR that each of them points at is easier
   to find than five amendments.

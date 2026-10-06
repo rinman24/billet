@@ -7,6 +7,7 @@ from typing import Any
 
 from billet.contracts import (
     BERTH_COPIED_FILES,
+    ComposeContainer,
     ContainerMetrics,
     CpuMetrics,
     DevcontainerFacts,
@@ -18,6 +19,7 @@ from billet.contracts import (
     MemoryMetrics,
     PackagedBerth,
     PlanStep,
+    PortPublisher,
     ProvisioningSpec,
     RemoteHost,
     RuntimeState,
@@ -412,10 +414,36 @@ def make_berth_read(
     return WorkspaceBerthRead(workspace=key, head=head, files=files)
 
 
-def make_runtime_read(*log_lines: str) -> WorkspaceRuntimeRead:
-    """Return a running container's read; with no lines, a clean start on the shipped Berth."""
+def make_container(
+    project: str = "gswa-backend",
+    service: str | None = None,
+    *publishers: PortPublisher,
+    container_id: str | None = None,
+) -> ComposeContainer:
+    """Return one running container of ``project``; ``service`` defaults to the project.
+
+    With no ``publishers`` it publishes sshd on loopback, as every Workspace does (ADR-0003).
+    """
+    name = service or project
+    return ComposeContainer(
+        id=container_id or f"{project}-{name}",
+        project=project,
+        service=name,
+        publishers=publishers or (PortPublisher("127.0.0.1", 22, 2222, "tcp"),),
+    )
+
+
+def make_runtime_read(
+    *log_lines: str, project: str = "gswa-backend", containers: Sequence[ComposeContainer] = ()
+) -> WorkspaceRuntimeRead:
+    """Return a running container's read; with no lines, a clean start on the shipped Berth.
+
+    ``containers`` are what the project ``ps`` lists; by default the one main-service
+    container of ``project``, publishing sshd on loopback.
+    """
     lines = log_lines or (f"dev-entrypoint: berth={make_packaged_berth().version}",)
-    return WorkspaceRuntimeRead(RuntimeState.RUNNING, log_lines=lines)
+    listed = tuple(containers) or (make_container(project),)
+    return WorkspaceRuntimeRead(RuntimeState.RUNNING, log_lines=lines, containers=listed)
 
 
 class FakeDoctorAccess:
@@ -457,7 +485,7 @@ class FakeDoctorAccess:
         return tuple(
             WorkspaceProbe(
                 berth=make_berth_read(spec.key, overrides=self._overrides.get(spec.key)),
-                runtime=self._runtimes.get(spec.key, make_runtime_read()),
+                runtime=self._runtimes.get(spec.key, make_runtime_read(project=spec.key)),
             )
             for spec in specs
         )

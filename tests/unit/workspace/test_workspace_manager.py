@@ -5,12 +5,15 @@ import pytest
 from billet.access.doctor.ssh_doctor_access import SshDoctorAccess
 from billet.contracts import (
     BerthFileState,
+    ComposeReport,
     DevcontainerFacts,
     DoctorFilters,
     DoctorSkip,
+    PortPublisher,
     RemoteHost,
     RunningBerthState,
     RuntimeState,
+    SharedProject,
     SshConfigBlock,
     WorkspaceRuntimeRead,
     WorkspaceSpec,
@@ -26,6 +29,7 @@ from tests.unit._fakes import (
     FakeSshConfigAccess,
     RecordingPlanObserver,
     completed,
+    make_container,
     make_devcontainer_facts,
     make_packaged_berth,
     make_remote_host,
@@ -445,7 +449,7 @@ def test_doctor_attaches_each_workspace_runtime_against_its_checkout_stamp() -> 
     doctor = FakeDoctorAccess(
         overrides={"billet": {"berth.version": "2\n"}},
         runtimes={
-            "billet": make_runtime_read("dev-entrypoint: berth=1"),
+            "billet": make_runtime_read("dev-entrypoint: berth=1", project="billet"),
             "squadra": WorkspaceRuntimeRead(RuntimeState.NOT_RUNNING),
         },
     )
@@ -456,3 +460,66 @@ def test_doctor_attaches_each_workspace_runtime_against_its_checkout_stamp() -> 
     assert billet is not None and billet.berth_state is RunningBerthState.DIFFERS
     assert (billet.running_berth, billet.checkout_stamp) == ("1", 2)
     assert squadra is not None and squadra.state is RuntimeState.NOT_RUNNING
+
+
+# --- doctor: compose project and published ports (A8) -------------------------------------
+
+BRAND_WS = make_workspace_spec(key="genshift-brand", repo_dir="genshift-brand")
+
+
+def test_doctor_reports_each_running_workspace_on_its_own_project() -> None:
+    report = _doctor_manager(FakeDoctorAccess()).doctor(
+        DOCTOR_ITEMS, make_packaged_berth(), DoctorFilters()
+    )
+    compose = {s.workspace: s.runtime.compose for s in report.statuses if s.runtime}
+    assert compose == {
+        "gswa-backend": ComposeReport(projects=("gswa-backend",)),
+        "billet": ComposeReport(projects=("billet",)),
+        "squadra": ComposeReport(projects=("squadra",)),
+    }
+    assert report.shared_projects == ()
+
+
+def test_doctor_reports_a_project_two_workspaces_share_once_per_host() -> None:
+    """S2-5 through the manager: one Host-level finding; the stopped one contributes nothing."""
+    billet = make_container("devcontainer", "billet")
+    brand = make_container("devcontainer", "genshift-brand")
+    sql = make_container("devcontainer", "sql", PortPublisher("0.0.0.0", 5432, 5432, "tcp"))
+    doctor = FakeDoctorAccess(
+        runtimes={
+            "billet": make_runtime_read(containers=[billet, brand, sql]),
+            "genshift-brand": make_runtime_read(containers=[brand, billet, sql]),
+            "gswa-backend": WorkspaceRuntimeRead(RuntimeState.NOT_RUNNING),
+        }
+    )
+    items = [(SPEC, DEVBOX), (BILLET_WS, DEVBOX), (BRAND_WS, DEVBOX), (SQUADRA_WS, OTHER)]
+    report = _doctor_manager(doctor).doctor(items, make_packaged_berth(), DoctorFilters())
+    assert report.shared_projects == (
+        SharedProject("devbox", "devcontainer", ("billet", "genshift-brand")),
+    )
+    runtime = {s.workspace: s.runtime for s in report.statuses}
+    gswa, billet_rt, brand_rt = (
+        runtime["gswa-backend"],
+        runtime["billet"],
+        runtime["genshift-brand"],
+    )
+    assert gswa is not None and gswa.compose is None  # not running: neither line
+    assert billet_rt is not None and billet_rt.compose is not None
+    assert brand_rt is not None and brand_rt.compose is not None
+    assert billet_rt.compose.foreign_projects == ("devcontainer",)
+    # S2-6: the sidecar both `ps` list is reported once, under the first Workspace.
+    assert [e.service for e in billet_rt.compose.exposed] == ["sql"]
+    assert brand_rt.compose.exposed == ()
+
+
+def test_doctor_never_groups_projects_across_hosts() -> None:
+    """Two Hosts may each run a project of the same name; that is not a shared project."""
+    doctor = FakeDoctorAccess(
+        runtimes={
+            "gswa-backend": make_runtime_read(project="devcontainer"),
+            "squadra": make_runtime_read(project="devcontainer"),
+        }
+    )
+    items = [(SPEC, DEVBOX), (SQUADRA_WS, OTHER)]
+    report = _doctor_manager(doctor).doctor(items, make_packaged_berth(), DoctorFilters())
+    assert report.shared_projects == ()

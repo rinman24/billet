@@ -18,7 +18,13 @@ from billet.access.doctor import packaged_berth
 from billet.access.doctor.ssh_doctor_access import SshDoctorAccess
 from billet.cli import _ui, workspace_commands as wc
 from billet.cli.app import app
-from billet.contracts import DoctorAccess, HostPowerState, HostStatus, PackagedBerth
+from billet.contracts import (
+    DoctorAccess,
+    HostPowerState,
+    HostStatus,
+    PackagedBerth,
+    PortPublisher,
+)
 from billet.infrastructure.process import CompletedProcess, SubprocessRunner
 from billet.shared.errors import ConfigError, HostOperationError
 from billet.workspace.manager.workspace_manager import WorkspaceManager
@@ -28,7 +34,9 @@ from tests.unit._fakes import (
     FakeHostProvider,
     FakeSourceAccess,
     FakeSshConfigAccess,
+    make_container,
     make_packaged_berth,
+    make_runtime_read,
 )
 
 runner = CliRunner()
@@ -265,11 +273,29 @@ def test_doctor_reports_ok_berth_and_names_the_installed_billet(
         "ok: dev-entrypoint.sh",
         "ok: sshd.conf",
         f"ok: running berth={shipped}",
+        "ok: compose project gswa-backend",
+        "ok: ports loopback only",
     ):
         assert line in result.output
     assert "warn:" not in result.output
     assert "0 warnings across 1 workspace" in result.output
     assert doctor.calls == [("gswa-devbox", ("gswa-backend",))]  # via the ssh alias, no az
+
+
+def test_doctor_warns_on_a_foreign_project_and_a_public_port_and_still_exits_zero(
+    monkeypatch: pytest.MonkeyPatch, config_file: Path
+) -> None:
+    """S2-7: each new warn counts toward the total; the exit status stays 0 (D-A8-2)."""
+    sql = make_container("devcontainer", "sql", PortPublisher("0.0.0.0", 5432, 5432, "tcp"))
+    runtime = make_runtime_read(containers=[make_container("devcontainer", "gswa-backend"), sql])
+    _install(monkeypatch, doctor=FakeDoctorAccess(runtimes={"gswa-backend": runtime}))
+    result = runner.invoke(app, ["doctor", "--config", str(config_file)])
+    assert result.exit_code == 0, result.output
+    assert "warn: runs as compose project devcontainer, expected gswa-backend (ADR-0017)" in (
+        result.output
+    )
+    assert "warn: sql (project devcontainer) publishes 0.0.0.0:5432->5432/tcp" in result.output
+    assert "2 warnings across 1 workspace" in result.output
 
 
 def test_doctor_warns_on_drift_and_still_exits_zero(

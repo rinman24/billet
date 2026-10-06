@@ -279,8 +279,12 @@ def doctor(
     shows its short HEAD, its ``berth.version`` stamp, and whether ``dev-entrypoint.sh``,
     ``sshd.conf`` and ``authorized_keys-stub`` agree with billet's copies by directive hash.
     Then, from the running container's entrypoint log (never an exec), the Berth it started
-    with, each mountpoint it repaired and each warning it printed.
-    ``--host`` / ``--workspace`` filter the report. An unreachable Host is reported skipped
+    with, each mountpoint it repaired and each warning it printed. From one
+    ``docker compose ps --format json``, the compose project it runs under against its key
+    and any project shared on its Host (ADR-0017), and every port a container in the project
+    publishes on a non-loopback address (ADR-0003).
+    ``--host`` / ``--workspace`` filter the report; with ``--workspace``, project sharing and
+    port de-duplication see only that Workspace. An unreachable Host is reported skipped
     and is never started. Warn, never fail: the exit status is 0 whatever the report says.
     """
     try:

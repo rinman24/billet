@@ -8,6 +8,7 @@ raw copy is asserted directly.
 """
 
 from collections.abc import Iterator
+from dataclasses import replace
 import io
 import json
 import re
@@ -29,14 +30,18 @@ from billet.contracts import (
     BerthFileState,
     BerthFileStatus,
     BerthStatus,
+    ComposeReport,
     DoctorReport,
     DoctorSkip,
+    ExposedPort,
     HostPowerState,
     Plan,
     PlanStep,
+    PortPublisher,
     RunningBerthState,
     RuntimeReport,
     RuntimeState,
+    SharedProject,
     StampState,
     StampStatus,
     StepKind,
@@ -890,3 +895,127 @@ def test_render_doctor_runtime_on_a_terminal_uses_the_same_words() -> None:
     text = console.export_text()
     assert "ok (repaired at start): /home/dev/.claude (was root:root 755)" in text
     assert "skipped: not running" in text
+
+
+# --- doctor view: compose project and published ports (A8, D-A8-13) ----------------------
+
+
+def _running(compose: ComposeReport | None) -> RuntimeReport:
+    return RuntimeReport(
+        state=RuntimeState.RUNNING,
+        checkout_stamp=1,
+        running_berth="1",
+        berth_state=RunningBerthState.MATCH,
+        compose=compose,
+    )
+
+
+def _exposed(project: str, service: str, url: str, published: int, target: int) -> ExposedPort:
+    return ExposedPort(
+        project, service, f"{service}-id", PortPublisher(url, target, published, "tcp")
+    )
+
+
+def _compose_report() -> DoctorReport:
+    clean = ComposeReport(projects=("gswa-backend",))
+    shared = ComposeReport(
+        projects=("devcontainer",),
+        foreign_projects=("devcontainer",),
+        exposed=(
+            _exposed("devcontainer", "sql", "0.0.0.0", 5432, 5432),
+            _exposed("devcontainer", "web", "::", 3000, 3000),
+        ),
+    )
+    exposed = ComposeReport(
+        projects=("squadra",),
+        exposed=(
+            _exposed("squadra", "api", "10.0.0.4", 8080, 80),
+            _exposed("squadra", "squadra", "", 2226, 22),
+        ),
+    )
+    return DoctorReport(
+        berth_version=1,
+        statuses=(
+            _runtime_status("gswa-backend", _running(clean)),
+            _runtime_status("billet", _running(shared)),
+            _runtime_status(
+                "genshift-brand", _running(ComposeReport(("devcontainer",), ("devcontainer",)))
+            ),
+            _runtime_status("stopped", RuntimeReport(state=RuntimeState.NOT_RUNNING)),
+            replace(_runtime_status("squadra", _running(exposed)), host="other"),
+        ),
+        skipped=(),
+        shared_projects=(SharedProject("devbox", "devcontainer", ("billet", "genshift-brand")),),
+    )
+
+
+_COMPOSE_LINES = [
+    "host devbox",
+    "  warn: compose project devcontainer shared by billet, genshift-brand (ADR-0017)",
+    "  gswa-backend · head b8464f2",
+    "    ok: running berth=1",
+    "    ok: compose project gswa-backend",
+    "    ok: ports loopback only",
+    "  billet · head b8464f2",
+    "    ok: running berth=1",
+    "    warn: runs as compose project devcontainer, expected billet (ADR-0017)",
+    "    warn: sql (project devcontainer) publishes 0.0.0.0:5432->5432/tcp on a non-loopback"
+    " address (ADR-0003)",
+    "    warn: web (project devcontainer) publishes [::]:3000->3000/tcp on a non-loopback"
+    " address (ADR-0003)",
+    "  genshift-brand · head b8464f2",
+    "    ok: running berth=1",
+    "    warn: runs as compose project devcontainer, expected genshift-brand (ADR-0017)",
+    "    ok: ports loopback only",
+    "  stopped · head b8464f2",
+    "    skipped: not running",
+    "host other",
+    "  squadra · head b8464f2",
+    "    ok: running berth=1",
+    "    ok: compose project squadra",
+    "    warn: api publishes 10.0.0.4:8080->80/tcp on a non-loopback address (ADR-0003)",
+    "    warn: squadra publishes *:2226->22/tcp on a non-loopback address (ADR-0003)",
+]
+
+
+def _without_berth_files(lines: list[str]) -> list[str]:
+    return [line for line in lines if "berth.version" not in line]
+
+
+def test_render_doctor_compose_lines_plain() -> None:
+    """S2-8 plain, S2-5 (Host-level and per-Workspace), S2-7 (every warn counted)."""
+    console, buffer = _plain_console()
+    _ui.render_doctor(_compose_report(), "0.4.0", console=console)
+    lines = buffer.getvalue().splitlines()
+    assert _without_berth_files(lines[3:-1]) == _COMPOSE_LINES
+    # 1 shared + billet (1 foreign + 2 ports) + genshift-brand (1 foreign) + squadra (2 ports)
+    assert lines[-1] == "· 7 warnings across 5 workspaces"
+    assert _ui.doctor_warning_count(_compose_report()) == 7
+
+
+def test_render_doctor_compose_lines_on_a_terminal_use_the_same_words() -> None:
+    """S2-8 on a tty: the same words, only the gutter and color differ."""
+    console = _terminal_console()
+    _ui.render_doctor(_compose_report(), "0.4.0", console=console)
+    text = console.export_text()
+    for line in _COMPOSE_LINES:
+        if not line.startswith("host "):
+            assert line in text, line
+    assert "7 warnings across 5 workspaces" in text
+
+
+def test_render_doctor_gives_an_unreadable_workspace_no_compose_lines() -> None:
+    unreadable = RuntimeReport(
+        state=RuntimeState.UNREADABLE, reason="docker compose ps --format json: invalid JSON"
+    )
+    report = DoctorReport(
+        berth_version=1, statuses=(_runtime_status("gswa-backend", unreadable),), skipped=()
+    )
+    console, buffer = _plain_console()
+    _ui.render_doctor(report, "0.4.0", console=console)
+    lines = buffer.getvalue().splitlines()
+    assert (
+        "    skipped: runtime unreadable (docker compose ps --format json: invalid JSON)" in lines
+    )
+    assert "    ok: berth.version 1" in lines  # the Berth results still print
+    assert not any("compose project" in line or "ports" in line for line in lines)
