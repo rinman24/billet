@@ -77,11 +77,20 @@ never fail. No Dockerfile parsing.**
    never started or allocated: `doctor` reaches a Host through its ssh-config alias and makes no
    `az` call. The probe is bounded (*amended 2026-09-30*). Its ssh session carries
    `ConnectTimeout=5` and `BatchMode=yes`, plus keepalives (`ServerAliveInterval=5`,
-   `ServerAliveCountMax=3`), so a link that dies mid-probe ends as ssh exit 255, reported
-   unreachable, in about 15 s. A wall-clock deadline of 30 s covers each Host's whole
-   conversation, opening through exit; on expiry billet kills the ssh child and reports the Host
-   `skipped: host <name> probe timed out after 30s`, a reason distinct from unreachable (ssh
-   connected; the probe stalled). The deadline is a constant, with no flag. Every in-band marker
+   `ServerAliveCountMax=3`). A link that dies early in a probe therefore ends as ssh exit 255 and
+   is reported unreachable; one that dies later than about 10 s into the probe is reported
+   `probe timed out after 30s`, because the deadline fires before the keepalives' roughly
+   15-20 s run out (*clarified 2026-10-05*; the values are unchanged). A wall-clock deadline of
+   30 s covers each Host's whole conversation, opening through exit; on expiry billet kills the
+   ssh child and reports the Host `skipped: host <name> probe timed out after 30s`, a reason
+   distinct from unreachable (ssh connected; the probe stalled). *Amended 2026-10-05:* the
+   deadline bounds every wait of the conversation, the writes to ssh's stdin and the reads after
+   ssh exits included. ssh runs in a session of its own, and the deadline, an error or an
+   interrupt kills its whole process group, even when ssh itself has already exited. Once ssh
+   exits and the conversation ends normally, billet reads what is left on its pipes for a grace
+   of at most 2 s, then closes them without killing anything, so a process ssh left holding them
+   (a `ControlPersist` master, say) cannot hold `doctor`, and ssh's own exit status decides the
+   result. The deadline is a constant, with no flag. Every in-band marker
    of the probe carries a nonce drawn at random for each run: the section headers
    (`===<section>@<nonce>===`), the missing-value marker, the end-of-reads sentinel that
    triggers the runtime part, and the runtime markers. A line in a consumer's file that looks
@@ -162,9 +171,11 @@ never fail. No Dockerfile parsing.**
                            RuntimeReport, PackagedBerth, WorkspaceBerthRead,
                            WorkspaceRuntimeRead, WorkspaceProbe, DoctorReport (frozen dataclasses)
    billet.infrastructure + ConversationRunner — one process whose stdin script is written in two
-                           parts, the second computed from the first part's output; a
-                           timeout kills and reaps it (ProcessTimeoutError), and so
-                           does any error mid-conversation
+                           parts, the second computed from the first part's output; one
+                           selector loop, not a drain thread, reads and writes every pipe,
+                           each wait capped by the deadline (amended 2026-10-05); a timeout
+                           kills the process group and reaps the process
+                           (ProcessTimeoutError), and so does any error mid-conversation
    ```
 
    `DoctorAccess` is its own seam rather than a method on `ContainerAccess`: it has one caller
