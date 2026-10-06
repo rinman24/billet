@@ -12,7 +12,11 @@ two parts over the same session (:class:`~billet.infrastructure.process.Conversa
    parser, so the container lookup names the same service and compose files ``start`` drives.
    Per Workspace, under the usual compose prelude (``cd <repo_dir>``, billet's exports):
    ``docker compose -f … ps --status running -q <service>`` (scoped by service, D18), then
-   ``docker logs <id> 2>&1 | grep '^dev-entrypoint: '``.
+   ``docker logs <id> 2>&1 | grep '^dev-entrypoint: '``, then, in its own section,
+   ``docker compose -f … ps --format json`` with no service filter (A8, D-A8-3): every
+   running container of the Workspace's compose project, for its project and published
+   ports. The last two run only when the service's container is running. No compose file is
+   opened: compose reads the files it is named, as it does for ``start``.
 
 The probe never fetches, never forwards the agent, and never execs into a container
 (ADR-0015 items 1 and 4). Every docker command reads ``/dev/null`` as stdin so none can
@@ -23,7 +27,8 @@ the single line ``===missing@<nonce>===``. ``cat`` output is followed by one new
 file without a trailing newline cannot swallow the next marker; the extra blank line is
 harmless because the directive hash drops blank lines and JSONC ignores whitespace. A runtime
 section holds ``running@<nonce> <id>`` and the entrypoint lines, or
-``not running@<nonce>``, or ends with ``runtime probe failed@<nonce>``.
+``not running@<nonce>``; the compose section after it holds the ``ps`` JSON. Whichever of the
+two was open when a docker command failed ends with ``runtime probe failed@<nonce>``.
 
 The nonce is random per probe run (D-A7-5), so no line of a consumer's file can be taken for
 a marker: without it, a copied file holding ``===doctor:reads-done===`` would fire the
@@ -39,13 +44,16 @@ import shlex
 
 from billet.access.container.compose_script import (
     DEVCONTAINER_JSON,
+    compose_file_flags,
     compose_prelude,
     facts_from_json,
     running_ps_command,
 )
+from billet.access.doctor.compose_ps import ComposePsError, parse_compose_ps
 from billet.contracts import (
     BERTH_COPIED_FILES,
     ENTRYPOINT_LOG_PREFIX,
+    ComposeContainer,
     DevcontainerFacts,
     RemoteHost,
     RuntimeState,
@@ -232,6 +240,21 @@ def runtime_section(key: str) -> str:
     return f"runtime:{key}"
 
 
+def compose_section(key: str) -> str:
+    """Return the section name carrying ``key``'s ``docker compose ps --format json``."""
+    return f"compose:{key}"
+
+
+def project_ps_command(facts: DevcontainerFacts) -> str:
+    """Build the ``ps`` that lists every running container of the project as JSON (D-A8-3).
+
+    No service filter: sidecars publish ports too (D-A8-4). Same ``-f`` files as
+    :func:`~billet.access.container.compose_script.running_ps_command`, so it resolves the
+    same project.
+    """
+    return f"docker compose {compose_file_flags(facts)} ps --format json"
+
+
 def _cat_or_missing(path: str, markers: ProbeMarkers) -> str:
     quoted = shlex.quote(path)
     missing = shlex.quote(markers.missing)
@@ -266,11 +289,12 @@ def runtime_script(
     facts: Mapping[str, DevcontainerFacts | str],
     markers: ProbeMarkers,
 ) -> str:
-    """Build the runtime part: per spec whose facts parsed, find its container and log.
+    """Build the runtime part: per spec whose facts parsed, its container, log and project.
 
     Each Workspace runs in a subshell under the compose prelude (fail-fast there), with the
     outer ``errexit`` suspended around it, so one Workspace's docker failure is reported in
-    its own section and never ends the probe.
+    its own section and never ends the probe. Once the service is found running, its log is
+    read and the project's ``ps --format json`` follows in the compose section.
     """
     lines: list[str] = []
     for spec in specs:
@@ -288,6 +312,8 @@ def runtime_script(
             "id=${ids%%$'\\n'*}",
             f'echo {shlex.quote(markers.running)}"$id"',
             f'docker logs "$id" 2>&1 </dev/null | {{ grep {prefix} || true; }}',
+            _echo(markers.header(compose_section(spec.key))),
+            f"{project_ps_command(spec_facts)} </dev/null",
             ")",
             f'[ "$?" -eq 0 ] || {_echo(markers.runtime_failed)}',
             "set -e",
@@ -317,10 +343,38 @@ def read_facts(
     return facts
 
 
+def parse_compose_section(
+    section: str | None, markers: ProbeMarkers
+) -> tuple[ComposeContainer, ...] | str:
+    """Parse a running Workspace's compose section; a ``str`` is why it is unreadable.
+
+    The section is absent when the probe never reached the ``ps``; it ends with the failure
+    marker when ``ps`` failed. Output that will not parse, or lists no container although the
+    service was just found running, is unreadable too (D-A8-13).
+    """
+    if section is None:
+        return "no compose ps output"
+    lines = section.splitlines()
+    if markers.runtime_failed in lines:
+        return "docker compose ps --format json failed"
+    try:
+        containers = parse_compose_ps(section)
+    except ComposePsError as exc:
+        return f"docker compose ps --format json: {exc}"
+    return containers or "docker compose ps --format json listed no container"
+
+
 def parse_runtime(
-    section: str | None, facts: DevcontainerFacts | str | None, markers: ProbeMarkers
+    section: str | None,
+    compose: str | None,
+    facts: DevcontainerFacts | str | None,
+    markers: ProbeMarkers,
 ) -> WorkspaceRuntimeRead:
-    """Turn one runtime section (and why it may be absent) into a :class:`WorkspaceRuntimeRead`."""
+    """Turn one Workspace's runtime and compose sections into a :class:`WorkspaceRuntimeRead`.
+
+    ``facts`` says why the sections may be absent. A running service whose project ``ps``
+    failed, will not parse, or lists no container is ``UNREADABLE`` (D-A8-13).
+    """
     if isinstance(facts, str):
         return WorkspaceRuntimeRead(RuntimeState.UNREADABLE, reason=facts)
     lines = section.splitlines() if section is not None else []
@@ -330,12 +384,16 @@ def parse_runtime(
         )
     if lines[:1] == [markers.not_running]:
         return WorkspaceRuntimeRead(RuntimeState.NOT_RUNNING)
-    if lines and lines[0].startswith(markers.running):
-        return WorkspaceRuntimeRead(
-            RuntimeState.RUNNING,
-            log_lines=tuple(line for line in lines[1:] if line.startswith(ENTRYPOINT_LOG_PREFIX)),
-        )
-    return WorkspaceRuntimeRead(RuntimeState.UNREADABLE, reason="no runtime output")
+    if not (lines and lines[0].startswith(markers.running)):
+        return WorkspaceRuntimeRead(RuntimeState.UNREADABLE, reason="no runtime output")
+    containers = parse_compose_section(compose, markers)
+    if isinstance(containers, str):
+        return WorkspaceRuntimeRead(RuntimeState.UNREADABLE, reason=containers)
+    return WorkspaceRuntimeRead(
+        RuntimeState.RUNNING,
+        log_lines=tuple(line for line in lines[1:] if line.startswith(ENTRYPOINT_LOG_PREFIX)),
+        containers=containers,
+    )
 
 
 def parse_probe_output(
@@ -357,7 +415,10 @@ def parse_probe_output(
             files={name: sections.get(file_section(spec.key, name)) for name in BERTH_COPIED_FILES},
         )
         runtime = parse_runtime(
-            sections.get(runtime_section(spec.key)), facts.get(spec.key), markers
+            sections.get(runtime_section(spec.key)),
+            sections.get(compose_section(spec.key)),
+            facts.get(spec.key),
+            markers,
         )
         probes.append(WorkspaceProbe(berth=berth, runtime=runtime))
     return tuple(probes)
