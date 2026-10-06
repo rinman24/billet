@@ -40,7 +40,7 @@ are named in DDD terms; each row states what fixes the pattern.
 |---|---|---|---|
 | Product repo | billet | Conformist behind an anti-corruption layer | The repo authors `devcontainer.json` on its own cadence; billet adapts through `facts_from_json` (`access/container/compose_script.py`) → `DevcontainerFacts` (JSONC stripped, paths re-rooted, `postCreateCommand` normalized, the object form refused with a named error). billet never edits the repo's compose file ([ADR-0003](adr/adr-0003-workspace-port-binding-contract.md)). |
 | billet | Product repo | Open Host Service publishing a versioned Published Language; the consumer conforms by copy | The Berth: `templates/workspace/` plus [the adoption guide](adopting-a-repo.md). Until Berth 1 the language had no version and this row was a Shared Kernel replicated by hand; `berth.version` and the directive hash are what make it an OHS ([ADR-0012](adr/adr-0012-the-berth.md)). |
-| Shared toolchain image | Product repo (image pinner) | Customer/Supplier over a well-versioned Published Language | The consumer's Dockerfile is one digest-pinned `FROM` line and its CI `container:` must match. Toolchain versions are pinned in `versions.env`, tested by `verify-image.sh`, propagated by Renovate. Image 2.0.0 (planned) extends `verify-image.sh` with Berth conformance: `dev` at uid/gid 1000, `sudo -n`, `sshd`, the baked `sshd.conf`, `~/.ssh` dev-owned 0700. |
+| Shared toolchain image | Product repo (image pinner) | Customer/Supplier over a well-versioned Published Language | The consumer's Dockerfile is one digest-pinned `FROM` line and its CI `container:` must match. Toolchain versions are pinned in `versions.env`, tested by `verify-image.sh`, propagated by Renovate. From image 2.0.0 (2026-09-14) `verify-image.sh` checks Berth conformance: `dev` at uid/gid 1000, `sudo -n`, `sshd`, the baked `sshd.conf`, `~/.ssh` dev-owned 0700; 2.1.0 added four `sshd -T` directive checks. |
 | billet | Shared toolchain image | Conformist, undeclared | The image implements the Berth's build-time half (`dev` at uid 1000 with passwordless sudo, `openssh-server`, billet's sshd drop-in, `~/.ssh`) and says so; billet does not know the image exists. **The image carries no Lockers**: from 2.0.0 it pre-creates no credential directory with an `install -d` line, because the Berth entrypoint repairs mount-target ownership at start ([ADR-0013](adr/adr-0013-mountpoint-ownership-repaired-at-mount-time.md)). It does still ship a populated dev-owned `/home/dev/.claude` as a side effect of the Claude Code install, so that Locker is protected by copy-on-empty while `~/.config/gh` is the one target the repair handles. Lockers exist only in consumer compose files. |
 | Shared toolchain image | billet | Separate Ways, deliberately | billet builds its own reference Workspace from `python:3.11-bookworm` and must stay usable by a repository outside GenShift. No billet change may require the shared image. |
 | billet | Dotfiles | Open Host Service + Published Language, deliberately unvalidated | Three `@billet_*` tmux options, closed at three, with a stated test for a fourth ([ADR-0008](adr/adr-0008-workspace-identity-publication.md), [ADR-0009](adr/adr-0009-scope-of-identity-publication.md)). The healthiest relationship in the map. |
@@ -52,27 +52,28 @@ reads and writes across every one of these boundaries is ADR-0014.
 
 ## Live consumer inventory
 
-Verified 2026-09-09 by direct query of each remote. All three live consumers were current on
-the 2026-09-08 templates (the last pre-versioning revision); each moves to Berth 1 by copying
-`dev-entrypoint.sh` and `berth.version` from billet `main` once billet 0.4.0 ships.
+Verified 2026-10-06 against each consumer's `origin/main` and by `billet doctor` 0.5.0 on the
+Host: all four Workspaces are on Berth 2, the Berth billet 0.5.0 ships, and each runs
+`berth=2` with every published port on loopback. Each moved to Berth 2 by re-copying
+`dev-entrypoint.sh` and `berth.version` (see the revision log in `templates/workspace/README.md`).
 
 | Repo | Builds from | Berth | Lockers mounted (compose keys, ADR-0017) |
 |---|---|---|---|
-| genshift-brand | shared image `devcontainer:1.0.2@sha256:05e6807…` (one-line `FROM`) | pre-versioning, current | `claude_home`, `gh_config` (plus `sshd_keys`, Berth infrastructure) |
-| squadra | own Dockerfile from `python:3.11-bookworm` | pre-versioning, current | `claude_home`, `gh_config` (plus `sshd_keys`) |
-| gswa-backend | own Dockerfile from `python:3.12-bookworm` | pre-versioning, current | `claude_home`, `azure_home` (plus `sshd_keys`, and the data volumes `postgres_data` and `redis_data`); its `127.0.0.1:2222:22` port line is grandfathered by ADR-0003 |
-| billet (reference Workspace) | own Dockerfile | Berth 1 from billet 0.4.0 | `claude_home`, `azure_home`, `gh_config` (plus `sshd_keys`) |
+| genshift-brand | shared image `devcontainer:2.2.1@sha256:5626b81…` (one-line `FROM`) | 2 | `claude_home`, `gh_config` (plus `sshd_keys`, Berth infrastructure) |
+| squadra | own Dockerfile from `python:3.11-bookworm` | 2 | `claude_home`, `gh_config` (plus `sshd_keys`) |
+| gswa-backend | own Dockerfile from `python:3.12-bookworm` | 2 | `claude_home`, `azure_home` (plus `sshd_keys`, and the data volumes `postgres_data` and `redis_data`); `sql` also publishes `127.0.0.1:5432`, and its compose lists three variables in `BILLET_ENV_PUBLISH` |
+| billet (reference Workspace) | own Dockerfile | 2 | `claude_home`, `azure_home`, `gh_config` (plus `sshd_keys`) |
 | genshift-devcontainer | not a Workspace: its `sshd.conf` is a build input of the image | n/a | none |
 
 Every consumer compose file names its compose project after its Workspace key and uses bare,
 underscore-only volume keys ([ADR-0017](adr/adr-0017-one-compose-project-per-workspace.md)), so each Workspace has
-its own network and its own `<workspace-key>_<key>` volumes on the Host; the keys above are
-the ADR-0017 ones, each landing with that consumer's own rename and volume migration. This
-replaces the earlier rule that left existing consumer volume names as they were and gave
-service-prefixed names to new adopters only. The shared image's
-2.0.0 release (drops Locker pre-creation) waits for genshift-brand to be on Berth 1, because a
-fresh `gh` Locker mounted by a pre-Berth-1 entrypoint into a 2.0.0 image would stay root-owned
-with nothing to repair it.
+its own network and its own `<workspace-key>_<key>` volumes on the Host; each consumer landed
+the keys above with its own rename and volume migration. This replaced the earlier rule that
+left existing consumer volume names as they were and gave service-prefixed names to new
+adopters only. Every sshd port line is `127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-<n>}:22`. The
+shared image's 2.0.0 release (2026-09-14, drops Locker pre-creation) requires consumers on
+Berth 1 or later, because a fresh `gh` Locker mounted by a pre-Berth-1 entrypoint into a 2.0.0
+image would stay root-owned with nothing to repair it.
 
 ## Open questions
 
@@ -94,7 +95,7 @@ implemented, and 5 is deferred again.
    in the image and the consumer's compose points at them (`entrypoint:
    ${BILLET_ENTRYPOINT:-…}`), with a Berth-version OCI label. Precondition: the shared image's
    ADR record states that Docker, not billet, reads those files from the repo (its ADR-0001
-   says billet reads them; its ADR-0002, planned for the 2.0.0 release, corrects that). Must not
+   says billet reads them; its ADR-0002, shipped with 2.0.0 on 2026-09-14, corrects that). Must not
    break Separate Ways: a non-GenShift consumer keeps copying files.
 4. **`doctor` implementation** ([ADR-0015](adr/adr-0015-billet-doctor.md)). *Berth drift
    implemented (2026-09-29):* the pure `berth_policy` engine, the `DoctorAccess` seam (one
