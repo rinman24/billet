@@ -126,14 +126,17 @@ class ProbeMarkers:
 _SSH_CONNECT_TIMEOUT = 5
 
 # Keepalives (D-A7-2): a link that dies mid-probe ends as ssh exit 255, reported unreachable
-# like a failed connect, after about 5 s x 3 unanswered probes, well inside the deadline.
+# like a failed connect, once 3 probes 5 s apart go unanswered, about 15-20 s after it died.
+# That beats the deadline only for a link that dies early in the probe: one that dies later
+# than about 10 s in is reported `probe timed out after 30s` instead (D-A8-7).
 _SSH_SERVER_ALIVE_INTERVAL = 5
 _SSH_SERVER_ALIVE_COUNT_MAX = 3
 
 # The wall-clock bound on one Host's whole probe conversation, opening through exit
-# (D-A7-2). A live link on which the probe stalls (a hung `docker`, say) is what the
-# keepalives cannot end; on expiry the ssh child is killed and the Host is reported
-# `probe timed out` (D-A7-3). The measured run is about 2 s for four Workspaces.
+# (D-A7-2), every read and write included (D-A8-6). A live link on which the probe stalls (a
+# hung `docker`, say) is what the keepalives cannot end; on expiry ssh's process group is
+# killed and the Host is reported `probe timed out` (D-A7-3). The measured run is about 2 s
+# for four Workspaces.
 _PROBE_DEADLINE = 30.0
 
 # ssh(1) reserves exit 255 for its own failures (connect/auth); the probe never produces it.
