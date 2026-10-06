@@ -120,7 +120,7 @@ never fail. No Dockerfile parsing.**
    |---|---|---|
    | Berth version stamp and Berth-file drift | `.devcontainer/` in the Host checkout; billet's side is the installed package's own copy of `templates/workspace/` (force-included into the wheel, read through `importlib.resources`, never a repo path) | the stamp: `ok`, or a `warn` reading `behind by N`, `ahead (upgrade billet)` for a consumer newer than a stale install, or `unknown` when `berth.version` is missing. Then per copied file (`dev-entrypoint.sh`, `sshd.conf`, `authorized_keys-stub`): `ok`; `warn: <file> missing` when the file is absent; or `warn: <file> directive drift (N lines)` followed by a unified diff of the *normalized* lines, capped at 20 lines with `… (M more)`. One unit counts throughout (*2026-09-30*): the changed line, `+` or `-`. `N`, the 20-line cap and `M` all count changed lines only, so the changed lines shown plus `M` equal `N`; the bare `@@` separator printed between hunks is not counted. The **directive hash** is ADR-0012 item 5 with its 2026-09-29 clarification: fold continuations, strip each line, drop blank lines, drop lines starting `#`. The two merged snippets (`Dockerfile.snippet`, `docker-compose.snippet.yml`) are not checked, and the report says so in one line: a snippet-subset check would false-positive on everything ADR-0003 grandfathered |
    | Runtime and Locker ownership (in effect 2026-09-29) | the entrypoint's own log (`docker logs` of the service's running container): its `berth=N` line and the ADR-0013 repair lines. Only the current run counts: a restarted container keeps its log, so the report reads from the last `berth=` line on. `doctor` never execs into a container | the running Berth against the checkout's stamp: `ok: running berth=N`, or a `warn` reading `running berth=N, checkout stamp M` (also for `berth=unknown` or a missing stamp) or `running berth not logged`. Each `repaired` line: `ok (repaired at start): <path> (was <owner>:<group> <mode>)`. Each `warning:` or `WARNING:` line: `warn:` and the entrypoint's own text, such as `warn: <path> owned by uid <n>; not repaired`. Other entrypoint lines (`created …`, `skipping …`) are informational and not printed. A stopped container: `skipped: not running`. A Workspace whose `devcontainer.json` cannot be read or parsed, or whose `docker compose ps` or `docker logs` fails: `skipped: runtime unreadable (<reason>)`. *Accepted limitation:* ownership that changes after start is not seen; nothing in the fleet does that |
-   | Compose project (in effect 2026-10-05, A8) | the `Project` of every container `docker compose -f … ps --format json` lists for a running Workspace, JSON lines (Compose v2.21 and later) or one JSON array (older Compose) | per running Workspace, `ok: compose project <key>`, or `warn: runs as compose project <p>, expected <key> (ADR-0017)` when its containers run under a project other than its registry key. Per Host, under the Host header and only on a hit, `warn: compose project <p> shared by <ws1>, <ws2> (ADR-0017)` for a project two or more running Workspaces claim. A Workspace that is not running contributes nothing and gets neither line. *Accepted limitation:* only running containers are seen, so a stopped Workspace sharing a project shows when it starts, which is also when the collision bites |
+   | Compose project (in effect 2026-10-05, A8) | the `Project` of every container `docker compose -f … ps --format json` lists for a running Workspace, JSON lines (Compose v2.21 and later) or one JSON array (older Compose) | per running Workspace, `ok: compose project <key>`, or `warn: runs as compose project <p>, expected <key> (ADR-0017)` when its containers run under a project other than its registry key. Per Host, under the Host header and only on a hit, `warn: compose project <p> shared by <ws1>, <ws2> (ADR-0017)` for a project two or more running Workspaces claim. A Workspace that is not running contributes nothing and gets neither line. Both checks see only the Workspaces the report selected, so with `--workspace` no project is reported shared and every publisher is attributed to that Workspace. *Accepted limitation:* only running containers are seen, so a stopped Workspace sharing a project shows when it starts, which is also when the collision bites |
    | Published ports (in effect 2026-10-05, A8) | the `Publishers` of the same `ps` output: every service in the project, sidecars included | `ok: ports loopback only`, or one `warn: <service> publishes <addr>:<published>-><target>/<proto> on a non-loopback address (ADR-0003)` per publisher. Loopback is the `URL` parsed with Python's `ipaddress` into `127.0.0.0/8` or `::1`, never string-matched. `PublishedPort` 0 (exposed, not published) is ignored. `0.0.0.0`, `::`, a specific non-loopback address, and an empty `URL` with a non-zero `PublishedPort` (rendered `*`) all warn. Under a shared project every Workspace's `ps` lists the others' containers, so a publisher is reported once per Host, de-duplicated by container `ID` and attributed to the first Workspace in registry order that listed it, naming the service and, when it is not the Workspace's own, the project. If the `ps` fails or will not parse, the Workspace takes `skipped: runtime unreadable (<reason>)`; its Berth results still print |
 
    The report header names the installed billet's version and the Berth version it ships.
@@ -166,8 +166,8 @@ never fail. No Dockerfile parsing.**
    the repair could not fix (populated root-owned targets) and what it did fix (from the container
    log).
 
-5. **Where it lives in the architecture** (amended 2026-09-29). Unchanged layers, additions at
-   existing seams:
+5. **Where it lives in the architecture** (amended 2026-09-29, 2026-10-05). Unchanged layers,
+   additions at existing seams:
 
    ```
    billet.cli            + `doctor` verb and its renderer in _ui.py (renders; never mutates)
@@ -176,10 +176,17 @@ never fail. No Dockerfile parsing.**
                          + runtime_policy engine — pure: entrypoint log lines to RuntimeReport
                            (running Berth, repairs, warnings), and the running-versus-checkout
                            Berth compare; imports only contracts
-                         + WorkspaceManager.doctor(): groups Workspaces by Host, one probe each
+                         + compose_policy engine (2026-10-05) — pure, per Host: compose project
+                           against the Workspace key, projects shared by running Workspaces,
+                           non-loopback publishers by ipaddress, de-duplicated by container ID;
+                           imports only contracts
+                         + WorkspaceManager.doctor(): groups Workspaces by Host, one probe each,
+                           and runs compose_policy over each Host's probes
    billet.access         + SshDoctorAccess — the DoctorAccess seam: one sectioned probe per Host,
                            reads then runtime over one SSH session, under a 30 s
                            deadline, every marker carrying a per-run nonce
+                         + compose_ps (2026-10-05) — pure parser of `ps --format json`, JSON
+                           lines or one array, to ComposeContainer; part of the doctor access
                          + compose_script — the devcontainer.json parser, compose prelude and
                            running-service ps SshDoctorAccess shares with
                            ComposeContainerAccess; the one access module another imports
@@ -187,6 +194,8 @@ never fail. No Dockerfile parsing.**
    billet.contracts      + DoctorAccess (Protocol); BerthStatus, BerthFileStatus, StampStatus,
                            RuntimeReport, PackagedBerth, WorkspaceBerthRead,
                            WorkspaceRuntimeRead, WorkspaceProbe, DoctorReport (frozen dataclasses)
+                         + (2026-10-05) PortPublisher, ComposeContainer, ExposedPort,
+                           ComposeReport, SharedProject (frozen dataclasses)
    billet.infrastructure + ConversationRunner — one process whose stdin script is written in two
                            parts, the second computed from the first part's output; one
                            selector loop, not a drain thread, reads and writes every pipe,
