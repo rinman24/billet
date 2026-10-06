@@ -49,8 +49,8 @@ services:
     # In-container sshd published to the VM loopback ONLY (never internet-facing, so the
     # Host NSG stays a single :22→operator-IP rule). The port is billet's assigned
     # loopback port, passed in as BILLET_CONTAINER_SSH_PORT before every compose call
-    # (ADR-0003). It MUST be interpolated so it doesn't collide with gswa's fixed 2222;
-    # the `:-2222` default only applies when run outside billet.
+    # (ADR-0003). It MUST be interpolated so it doesn't collide with another Workspace's
+    # port on the same Host; the `:-2222` default only applies when run outside billet.
     ports:
       - "127.0.0.1:${BILLET_CONTAINER_SSH_PORT:-2222}:22"
 
